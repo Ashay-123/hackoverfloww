@@ -1,0 +1,429 @@
+(function () {
+  'use strict';
+
+  const API = 'http://localhost:3000';
+  let user = null;
+
+  function getUser() {
+    if (user) return user;
+    try {
+      const s = sessionStorage.getItem('user');
+      if (!s) return null;
+      user = JSON.parse(s);
+      return user;
+    } catch (_) { return null; }
+  }
+
+  function redirectLogin() {
+    sessionStorage.removeItem('user');
+    window.location.href = '/';
+  }
+
+  function headers() {
+    const u = getUser();
+    return { 'Content-Type': 'application/json', ...(u && u.id ? { 'x-user-id': String(u.id) } : {}) };
+  }
+
+  function get(url) {
+    return fetch(API + url, { headers: headers() }).then(r => r.json());
+  }
+
+  function post(url, body) {
+    return fetch(API + url, { method: 'POST', headers: headers(), body: JSON.stringify(body) }).then(r => r.json());
+  }
+
+  function put(url, body) {
+    return fetch(API + url, { method: 'PUT', headers: headers(), body: JSON.stringify(body) }).then(r => r.json());
+  }
+
+  function patch(url) {
+    return fetch(API + url, { method: 'PATCH', headers: headers() }).then(r => r.json());
+  }
+
+  // ---------- DOM ----------
+  function $(id) { return document.getElementById(id); }
+  function qs(s) { return document.querySelector(s); }
+  function qsa(s) { return document.querySelectorAll(s); }
+
+  // ---------- Nav & sections ----------
+  function setSection(id) {
+    qsa('.section').forEach(el => el.classList.remove('active'));
+    qsa('.nav-item').forEach(el => el.classList.remove('active'));
+    const sec = $(id);
+    const nav = document.querySelector('.nav-item[href="#' + id + '"]');
+    if (sec) sec.classList.add('active');
+    if (nav) nav.classList.add('active');
+  }
+
+  function onHash() {
+    const h = (window.location.hash || '#dashboard').slice(1);
+    setSection(h || 'dashboard');
+    const sidebar = $('sidebar');
+    if (sidebar && sidebar.classList.contains('open')) {
+      sidebar.classList.remove('open');
+      $('overlay').classList.remove('open');
+    }
+  }
+
+  window.addEventListener('hashchange', onHash);
+  window.addEventListener('load', onHash);
+
+  // ---------- Sidebar & menu ----------
+  $('menuBtn')?.addEventListener('click', function () {
+    $('sidebar')?.classList.toggle('open');
+    $('overlay')?.classList.toggle('open');
+  });
+  $('overlay')?.addEventListener('click', function () {
+    $('sidebar')?.classList.remove('open');
+    this.classList.remove('open');
+  });
+
+  $('userMenuBtn')?.addEventListener('click', function () {
+    document.querySelector('.user-menu')?.classList.toggle('open');
+  });
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('.user-menu')) document.querySelector('.user-menu')?.classList.remove('open');
+  });
+
+  function logout() { redirectLogin(); }
+  $('logoutBtn')?.addEventListener('click', logout);
+  $('logoutBtn2')?.addEventListener('click', logout);
+
+  // ---------- Tabs ----------
+  qsa('.tab').forEach(t => {
+    t.addEventListener('click', function () {
+      const key = this.dataset.tab;
+      const panel = document.querySelector('.tab-panel[data-panel="' + key + '"]');
+      const group = this.closest('.section');
+      if (!group) return;
+      group.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+      group.querySelectorAll('.tab-panel').forEach(x => x.classList.remove('active'));
+      this.classList.add('active');
+      if (panel) panel.classList.add('active');
+      if (key === 'explore') loadEvents();
+      if (key === 'registered') loadRegistered();
+      if (key === 'catalog') loadResources();
+      if (key === 'mybookings') loadBookings();
+      if (key === 'bookform') loadResourceOptions();
+      if (key === 'myclubs') loadMyClubs();
+      if (key === 'exploreclubs') loadClubsExplore();
+    });
+  });
+
+  // ---------- Profile ----------
+  function renderProfile(u, p) {
+    const name = p?.full_name || u?.email?.split('@')[0] || 'Student';
+    const dept = p?.department || '—';
+    const year = p?.academic_year || '—';
+    const initial = (name[0] || 'S').toUpperCase();
+
+    $('userName').textContent = name;
+    $('userAvatar').textContent = initial;
+    $('ppAvatar').textContent = initial;
+    $('ppName').textContent = name;
+    $('ppDept').textContent = dept;
+    $('ppYear').textContent = year;
+
+    $('pFullName').value = p?.full_name || '';
+    $('pDepartment').value = p?.department || '';
+    $('pYear').value = p?.academic_year || '';
+    $('pPhone').value = p?.phone || '';
+    $('pBio').value = p?.bio || '';
+    $('pVisibility').value = p?.profile_visibility || 'internal';
+    $('settingsVisibility').value = p?.profile_visibility || 'internal';
+    $('settingsEmail').textContent = u?.email || '—';
+  }
+
+  function loadProfile() {
+    get('/api/profile').then(r => {
+      if (!r.success) return;
+      renderProfile(r.user, r.profile);
+    }).catch(() => {});
+  }
+
+  $('profileForm')?.addEventListener('submit', function (e) {
+    e.preventDefault();
+    put('/api/profile', {
+      full_name: $('pFullName').value.trim() || null,
+      department: $('pDepartment').value.trim() || null,
+      academic_year: $('pYear').value.trim() || null,
+      phone: $('pPhone').value.trim() || null,
+      bio: $('pBio').value.trim() || null,
+      profile_visibility: $('pVisibility').value
+    }).then(r => {
+      if (r.success) { loadProfile(); loadProfileClubs(); alert('Profile saved.'); }
+      else alert(r.message || 'Failed to save.');
+    }).catch(() => alert('Request failed.'));
+  });
+
+  $('settingsVisibility')?.addEventListener('change', function () {
+    put('/api/profile', { profile_visibility: this.value }).then(r => {
+      if (r.success) { loadProfile(); $('pVisibility').value = this.value; }
+    });
+  });
+
+  // ---------- Clubs (profile section) ----------
+  function loadProfileClubs() {
+    get('/api/profile/clubs').then(r => {
+      if (!r.success) return;
+      const memberOf = r.memberOf || [];
+      const heads = r.headsOrCoords || [];
+      $('profileMemberOf').innerHTML = memberOf.length
+        ? memberOf.map(c => '<li>' + escapeHtml(c.name) + ' <span class="muted">(' + (c.type || 'club') + ')</span></li>').join('')
+        : '<li class="empty">None</li>';
+      $('profileHeads').innerHTML = heads.length
+        ? heads.map(c => '<li>' + escapeHtml(c.name) + ' — ' + (c.membership_role === 'head' ? 'Head' : 'Coordinator') + '</li>').join('')
+        : '<li class="empty">None</li>';
+    });
+  }
+
+  // ---------- Dashboard: My clubs ----------
+  function loadMyClubsDashboard() {
+    get('/api/profile/clubs').then(r => {
+      const list = $('myClubsList');
+      if (!list) return;
+      const all = (r.all || []);
+      if (!all.length) { list.innerHTML = '<span class="empty">Not in any club yet. <a href="#clubs">Explore</a></span>'; return; }
+      list.innerHTML = '<ul class="list">' + all.slice(0, 5).map(c =>
+        '<li>' + escapeHtml(c.name) + ' <span class="muted">' + (c.membership_role !== 'member' ? '• ' + c.membership_role : '') + '</span></li>'
+      ).join('') + '</ul>';
+    });
+  }
+
+  // ---------- Events ----------
+  function loadEvents() {
+    const el = $('eventsList');
+    if (!el) return;
+    get('/api/events').then(r => {
+      const arr = r.events || [];
+      el.innerHTML = arr.length ? arr.map(e => {
+        const d = formatDate(e.start_date);
+        const reg = '<button type="button" class="btn btn-ghost" style="margin:0" data-event-id="' + e.id + '">Register</button>';
+        return '<div class="item-row"><div><h4>' + escapeHtml(e.title) + '</h4><p class="meta">' + d + (e.venue ? ' • ' + escapeHtml(e.venue) : '') + (e.club_name ? ' • ' + escapeHtml(e.club_name) : '') + '</p></div>' + reg + '</div>';
+      }).join('') : '<p class="muted">No approved events.</p>';
+      el.querySelectorAll('[data-event-id]').forEach(btn => {
+        btn.addEventListener('click', function () { registerEvent(parseInt(this.dataset.eventId, 10)); });
+      });
+    }).catch(() => { el.innerHTML = '<p class="muted">Could not load events.</p>'; });
+  }
+
+  function loadRegistered() {
+    const el = $('registeredList');
+    if (!el) return;
+    get('/api/events/registered').then(r => {
+      const arr = r.events || [];
+      el.innerHTML = arr.length ? arr.map(e => {
+        const d = formatDate(e.start_date);
+        return '<div class="item-row"><div><h4>' + escapeHtml(e.title) + '</h4><p class="meta">' + d + (e.venue ? ' • ' + escapeHtml(e.venue) : '') + (e.club_name ? ' • ' + escapeHtml(e.club_name) : '') + '</p><span class="status ' + (e.reg_status || 'registered') + '">' + (e.reg_status || 'registered') + '</span></div></div>';
+      }).join('') : '<p class="muted">No registered events.</p>';
+    }).catch(() => { el.innerHTML = '<p class="muted">Could not load.</p>'; });
+  }
+
+  function registerEvent(id) {
+    post('/api/events/register', { eventId: id }).then(r => {
+      if (r.success) { loadEvents(); loadRegistered(); loadUpcoming(); alert('Registered.'); }
+      else alert(r.message || 'Failed.');
+    }).catch(() => alert('Request failed.'));
+  }
+
+  function loadUpcoming() {
+    const el = $('upcomingEvents');
+    if (!el) return;
+    get('/api/events').then(r => {
+      const arr = (r.events || []).slice(0, 4);
+      el.innerHTML = arr.length ? '<ul class="list">' + arr.map(e =>
+        '<li>' + escapeHtml(e.title) + ' <span class="muted">' + formatDate(e.start_date) + '</span></li>'
+      ).join('') + '</ul>' : '<span class="empty">No upcoming events.</span>';
+    });
+  }
+
+  // ---------- Resources ----------
+  function loadResources() {
+    const el = $('resourcesList');
+    if (!el) return;
+    get('/api/resources').then(r => {
+      const arr = r.resources || [];
+      el.innerHTML = arr.length ? arr.map(res =>
+        '<div class="item-row"><div><h4>' + escapeHtml(res.name) + '</h4><p class="meta">' + (res.category || '') + (res.description ? ' • ' + escapeHtml(res.description) : '') + (res.requires_approval ? ' • Approval required' : '') + '</p></div></div>'
+      ).join('') : '<p class="muted">No resources.</p>';
+    });
+  }
+
+  function loadBookings() {
+    const el = $('bookingsList');
+    if (!el) return;
+    get('/api/resources/bookings').then(r => {
+      const arr = r.bookings || [];
+      el.innerHTML = arr.length ? arr.map(b => {
+        const start = formatDateTime(b.start_datetime);
+        return '<div class="item-row"><div><h4>' + escapeHtml(b.resource_name) + '</h4><p class="meta">' + start + ' <span class="status ' + (b.status || 'pending') + '">' + (b.status || 'pending') + '</span></p></div></div>';
+      }).join('') : '<p class="muted">No bookings.</p>';
+    });
+  }
+
+  function loadResourceOptions() {
+    const sel = $('bookResource');
+    if (!sel) return;
+    get('/api/resources').then(r => {
+      const arr = r.resources || [];
+      sel.innerHTML = '<option value="">Select resource</option>' + arr.map(res =>
+        '<option value="' + res.id + '">' + escapeHtml(res.name) + ' (' + (res.category || '') + ')</option>'
+      ).join('');
+    });
+  }
+
+  $('bookForm')?.addEventListener('submit', function (e) {
+    e.preventDefault();
+    const resourceId = parseInt($('bookResource').value, 10);
+    const start = $('bookStart').value;
+    const end = $('bookEnd').value;
+    if (!resourceId || !start || !end) { alert('Fill resource, start and end.'); return; }
+    post('/api/resources/book', { resourceId, start_datetime: start, end_datetime: end, purpose: $('bookPurpose').value }).then(r => {
+      if (r.success) { alert(r.message || 'Booking requested.'); loadBookings(); loadMyBookingsDashboard(); this.reset(); }
+      else alert(r.message || 'Failed.');
+    }).catch(() => alert('Request failed.'));
+  });
+
+  function loadMyBookingsDashboard() {
+    const el = $('myBookings');
+    if (!el) return;
+    get('/api/resources/bookings').then(r => {
+      const arr = (r.bookings || []).slice(0, 4);
+      el.innerHTML = arr.length ? '<ul class="list">' + arr.map(b =>
+        '<li>' + escapeHtml(b.resource_name) + ' <span class="muted">' + formatDateTime(b.start_datetime) + ' · ' + (b.status || 'pending') + '</span></li>'
+      ).join('') + '</ul>' : '<span class="empty">No bookings.</span>';
+    });
+  }
+
+  // ---------- Clubs (section) ----------
+  function loadMyClubs() {
+    const el = $('clubsMyList');
+    if (!el) return;
+    get('/api/profile/clubs').then(r => {
+      const all = r.all || [];
+      el.innerHTML = all.length ? all.map(c =>
+        '<div class="item-row"><div><h4>' + escapeHtml(c.name) + '</h4><p class="meta">' + (c.type || 'club') + ' • ' + (c.membership_role || 'member') + '</p></div></div>'
+      ).join('') : '<p class="muted">Not in any club. Explore and join below.</p>';
+    });
+  }
+
+  function loadClubsExplore() {
+    const el = $('clubsExploreList');
+    if (!el) return;
+    get('/api/clubs').then(r => {
+      const arr = r.clubs || [];
+      get('/api/profile/clubs').then(r2 => {
+        const myIds = (r2.all || []).map(c => c.id);
+        el.innerHTML = arr.map(c => {
+          const joined = myIds.includes(c.id);
+          const btn = joined ? '<span class="muted">Joined</span>' : '<button type="button" class="btn btn-ghost" style="margin:0" data-club-id="' + c.id + '">Join</button>';
+          return '<div class="item-row"><div><h4>' + escapeHtml(c.name) + '</h4><p class="meta">' + (c.type || 'club') + ' — ' + escapeHtml(c.description || '') + '</p></div>' + btn + '</div>';
+        }).join('');
+        el.querySelectorAll('[data-club-id]').forEach(btn => {
+          btn.addEventListener('click', function () {
+            post('/api/clubs/join', { clubId: parseInt(this.dataset.clubId, 10) }).then(res => {
+              if (res.success) { loadClubsExplore(); loadMyClubs(); loadMyClubsDashboard(); loadProfileClubs(); alert('Joined.'); }
+              else alert(res.message || 'Failed.');
+            });
+          });
+        });
+      });
+    });
+  }
+
+  // ---------- Notifications ----------
+  function loadNotifications() {
+    const el = $('notificationsList');
+    if (el) {
+      get('/api/notifications').then(r => {
+        const arr = r.notifications || [];
+        el.innerHTML = arr.length ? arr.map(n => {
+          const cls = n.is_read ? '' : ' style="background:rgba(124,156,255,0.08)"';
+          return '<div class="item-row" data-id="' + n.id + '"' + cls + '><div><h4>' + escapeHtml(n.title) + '</h4><p class="meta">' + escapeHtml(n.message || '') + ' · ' + formatDateTime(n.created_at) + '</p></div>' + (n.is_read ? '' : '<button type="button" class="btn btn-ghost" style="margin:0" data-read="' + n.id + '">Mark read</button>') + '</div>';
+        }).join('') : '<p class="muted">No notifications.</p>';
+        el.querySelectorAll('[data-read]').forEach(btn => {
+          btn.addEventListener('click', function () {
+            patch('/api/notifications/' + this.dataset.read + '/read').then(() => { loadNotifications(); updateNotifBadge(); });
+          });
+        });
+      });
+    }
+  }
+
+  function loadRecentNotifs() {
+    const el = $('recentNotifs');
+    if (!el) return;
+    get('/api/notifications').then(r => {
+      const arr = (r.notifications || []).slice(0, 4);
+      el.innerHTML = arr.length ? '<ul class="list">' + arr.map(n =>
+        '<li>' + escapeHtml(n.title) + ' <span class="muted">' + formatDateTime(n.created_at) + '</span></li>'
+      ).join('') + '</ul>' : '<span class="empty">No notifications.</span>';
+    });
+  }
+
+  function updateNotifBadge() {
+    get('/api/notifications').then(r => {
+      const n = (r.notifications || []).filter(x => !x.is_read).length;
+      const b = $('notifBadge');
+      if (b) { b.textContent = n; b.style.display = n ? 'flex' : 'none'; }
+    });
+  }
+
+  // ---------- Messages (threads) ----------
+  function loadMessageThreads() {
+    const el = $('messageThreads');
+    if (!el) return;
+    get('/api/messages/threads').then(r => {
+      const arr = r.threads || [];
+      el.innerHTML = arr.length ? '<ul class="list">' + arr.map(t =>
+        '<li>Thread #' + t.id + ' (' + (t.type || 'direct') + ')</li>'
+      ).join('') + '</ul>' : 'No threads yet.';
+    }).catch(() => { el.innerHTML = 'Could not load.'; });
+  }
+
+  // ---------- Helpers ----------
+  function escapeHtml(s) {
+    if (s == null) return '';
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function formatDate(s) {
+    if (!s) return '—';
+    try { return new Date(s + 'Z').toLocaleDateString(undefined, { dateStyle: 'medium' }); } catch (_) { return s; }
+  }
+
+  function formatDateTime(s) {
+    if (!s) return '—';
+    try {
+      const d = new Date(s);
+      if (isNaN(d.getTime())) return s;
+      return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+    } catch (_) { return s; }
+  }
+
+  // ---------- Init ----------
+  function init() {
+    const u = getUser();
+    if (!u || !u.id) { redirectLogin(); return; }
+    loadProfile();
+    loadProfileClubs();
+    loadMyClubsDashboard();
+    loadUpcoming();
+    loadMyBookingsDashboard();
+    loadRecentNotifs();
+    loadNotifications();
+    updateNotifBadge();
+    loadMessageThreads();
+    loadEvents();
+    loadRegistered();
+    loadResources();
+    loadBookings();
+    loadResourceOptions();
+    loadMyClubs();
+    loadClubsExplore();
+  }
+
+  init();
+})();

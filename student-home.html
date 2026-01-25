@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Student Home - Campus Resource & Event Management</title>
+  <link rel="stylesheet" href="student-home.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app">
+    <!-- Top bar -->
+    <header class="topbar">
+      <button class="menu-btn" id="menuBtn" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+      <a href="#" class="brand">Campus Hub</a>
+      <div class="topbar-actions">
+        <a href="#notifications" class="icon-btn" id="notifBtn" aria-label="Notifications">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <span class="badge" id="notifBadge">0</span>
+        </a>
+        <a href="#messages" class="icon-btn" aria-label="Messages">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </a>
+        <div class="user-menu">
+          <button class="user-btn" id="userMenuBtn">
+            <span class="avatar" id="userAvatar">S</span>
+            <span class="name" id="userName">Student</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div class="user-dropdown" id="userDropdown">
+            <a href="#profile">Profile &amp; visibility</a>
+            <a href="#settings">Settings</a>
+            <hr>
+            <button type="button" id="logoutBtn">Log out</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <nav class="nav">
+        <a href="#dashboard" class="nav-item active">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          Dashboard
+        </a>
+        <a href="#profile" class="nav-item">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          My profile
+        </a>
+        <a href="#events" class="nav-item">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          Events
+        </a>
+        <a href="#resources" class="nav-item">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          Resources
+        </a>
+        <a href="#clubs" class="nav-item">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          Clubs &amp; committees
+        </a>
+        <a href="#messages" class="nav-item">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          Messages
+        </a>
+        <a href="#notifications" class="nav-item">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          Notifications
+        </a>
+        <a href="#settings" class="nav-item">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </a>
+      </nav>
+    </aside>
+
+    <!-- Overlay for mobile -->
+    <div class="overlay" id="overlay"></div>
+
+    <!-- Main content -->
+    <main class="main">
+      <!-- Dashboard (default view) -->
+      <section id="dashboard" class="section active">
+        <h1 class="section-title">Dashboard</h1>
+        <p class="section-desc">Overview of your campus activity</p>
+
+        <div class="cards">
+          <div class="card profile-card">
+            <h3>My profile</h3>
+            <div class="profile-preview" id="profilePreview">
+              <div class="pp-avatar" id="ppAvatar">S</div>
+              <div class="pp-info">
+                <strong id="ppName">—</strong>
+                <span id="ppDept">—</span>
+                <span id="ppYear">—</span>
+              </div>
+              <a href="#profile" class="btn btn-ghost">Edit profile</a>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>My clubs &amp; committees</h3>
+            <div id="myClubsList" class="list-compact">Loading…</div>
+            <a href="#clubs" class="btn btn-ghost">View all</a>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>Upcoming events</h3>
+            <div id="upcomingEvents" class="list-compact">Loading…</div>
+            <a href="#events" class="btn btn-ghost">Explore events</a>
+          </div>
+          <div class="card">
+            <h3>My resource bookings</h3>
+            <div id="myBookings" class="list-compact">Loading…</div>
+            <a href="#resources" class="btn btn-ghost">Book a resource</a>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Recent notifications</h3>
+          <div id="recentNotifs" class="list-compact">Loading…</div>
+          <a href="#notifications" class="btn btn-ghost">See all</a>
+        </div>
+      </section>
+
+      <!-- Profile -->
+      <section id="profile" class="section">
+        <h1 class="section-title">My profile</h1>
+        <p class="section-desc">Basic details and visibility</p>
+
+        <div class="card">
+          <h3>Basic details</h3>
+          <form id="profileForm" class="form">
+            <div class="form-row">
+              <div class="field">
+                <label>Full name</label>
+                <input type="text" id="pFullName" placeholder="Your name">
+              </div>
+              <div class="field">
+                <label>Department</label>
+                <input type="text" id="pDepartment" placeholder="e.g. Computer Science">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="field">
+                <label>Academic year</label>
+                <input type="text" id="pYear" placeholder="e.g. 3rd Year">
+              </div>
+              <div class="field">
+                <label>Phone</label>
+                <input type="tel" id="pPhone" placeholder="Optional">
+              </div>
+            </div>
+            <div class="field">
+              <label>Bio</label>
+              <textarea id="pBio" rows="3" placeholder="A short bio (optional)"></textarea>
+            </div>
+            <div class="field">
+              <label>Profile visibility</label>
+              <select id="pVisibility">
+                <option value="public">Public — anyone can see</option>
+                <option value="internal">Internal — only logged-in users</option>
+                <option value="private">Private — only you</option>
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Save profile</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3>Clubs &amp; committees</h3>
+          <p class="muted">Clubs you are a member of and those you head or coordinate.</p>
+          <div class="two-col">
+            <div>
+              <h4>Member of</h4>
+              <ul id="profileMemberOf" class="list"></ul>
+            </div>
+            <div>
+              <h4>Heads / coordinates</h4>
+              <ul id="profileHeads" class="list"></ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Events -->
+      <section id="events" class="section">
+        <h1 class="section-title">Events</h1>
+        <p class="section-desc">Discover and manage your event participation</p>
+
+        <div class="tabs">
+          <button type="button" class="tab active" data-tab="explore">Explore</button>
+          <button type="button" class="tab" data-tab="registered">My registered</button>
+        </div>
+
+        <div class="tab-panel active" data-panel="explore">
+          <div id="eventsList" class="card-list">Loading…</div>
+        </div>
+        <div class="tab-panel" data-panel="registered">
+          <div id="registeredList" class="card-list">Loading…</div>
+        </div>
+      </section>
+
+      <!-- Resources -->
+      <section id="resources" class="section">
+        <h1 class="section-title">Resources</h1>
+        <p class="section-desc">Rooms, halls, labs, and equipment</p>
+
+        <div class="tabs">
+          <button type="button" class="tab active" data-tab="catalog">Catalog</button>
+          <button type="button" class="tab" data-tab="mybookings">My bookings</button>
+          <button type="button" class="tab" data-tab="bookform">Book</button>
+        </div>
+
+        <div class="tab-panel active" data-panel="catalog">
+          <div id="resourcesList" class="card-list">Loading…</div>
+        </div>
+        <div class="tab-panel" data-panel="mybookings">
+          <div id="bookingsList" class="card-list">Loading…</div>
+        </div>
+        <div class="tab-panel" data-panel="bookform">
+          <div class="card">
+            <form id="bookForm" class="form">
+              <div class="field">
+                <label>Resource</label>
+                <select id="bookResource" required></select>
+              </div>
+              <div class="form-row">
+                <div class="field">
+                  <label>Start</label>
+                  <input type="datetime-local" id="bookStart" required>
+                </div>
+                <div class="field">
+                  <label>End</label>
+                  <input type="datetime-local" id="bookEnd" required>
+                </div>
+              </div>
+              <div class="field">
+                <label>Purpose</label>
+                <textarea id="bookPurpose" rows="2" placeholder="Brief purpose (optional)"></textarea>
+              </div>
+              <button type="submit" class="btn btn-primary">Request booking</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- Clubs -->
+      <section id="clubs" class="section">
+        <h1 class="section-title">Clubs &amp; committees</h1>
+        <p class="section-desc">Your memberships and explore more</p>
+
+        <div class="tabs">
+          <button type="button" class="tab active" data-tab="myclubs">My clubs</button>
+          <button type="button" class="tab" data-tab="exploreclubs">Explore</button>
+        </div>
+
+        <div class="tab-panel active" data-panel="myclubs">
+          <div id="clubsMyList" class="card-list">Loading…</div>
+        </div>
+        <div class="tab-panel" data-panel="exploreclubs">
+          <div id="clubsExploreList" class="card-list">Loading…</div>
+        </div>
+      </section>
+
+      <!-- Messages (placeholder) -->
+      <section id="messages" class="section">
+        <h1 class="section-title">Messages</h1>
+        <p class="section-desc">One-to-one and group chats</p>
+        <div class="card">
+          <p class="muted">Messages and threads will appear here. Use club or event chats for collaboration.</p>
+          <div id="messageThreads" class="list-compact">No threads yet.</div>
+        </div>
+      </section>
+
+      <!-- Notifications -->
+      <section id="notifications" class="section">
+        <h1 class="section-title">Notifications</h1>
+        <p class="section-desc">Event approvals, reminders, and booking updates</p>
+        <div id="notificationsList" class="card-list">Loading…</div>
+      </section>
+
+      <!-- Settings -->
+      <section id="settings" class="section">
+        <h1 class="section-title">Settings</h1>
+        <p class="section-desc">Preferences and account</p>
+        <div class="card">
+          <h3>Profile visibility</h3>
+          <p class="muted">Control who can see your profile details. You can also set this in <a href="#profile">My profile</a>.</p>
+          <select id="settingsVisibility">
+            <option value="public">Public</option>
+            <option value="internal">Internal</option>
+            <option value="private">Private</option>
+          </select>
+        </div>
+        <div class="card">
+          <h3>Notifications</h3>
+          <p class="muted">You will receive: event approvals/rejections, upcoming event reminders, and resource booking status updates.</p>
+        </div>
+        <div class="card">
+          <h3>Account</h3>
+          <p class="muted"><span id="settingsEmail">—</span></p>
+          <button type="button" id="logoutBtn2" class="btn btn-ghost">Log out</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="student-home.js"></script>
+</body>
+</html>

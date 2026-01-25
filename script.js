@@ -43,9 +43,13 @@ function handleLogin(event) {
             // Store user data in sessionStorage
             sessionStorage.setItem("user", JSON.stringify(data.user));
             
-            // Redirect to dashboard after short delay
+            // Redirect: participants -> student home; others -> dashboard
             setTimeout(() => {
-                showDashboard(data.user);
+                if (data.user.role === "participant") {
+                    window.location.href = "/student-home";
+                } else {
+                    showDashboard(data.user);
+                }
             }, 1000);
         } else {
             // Show error message
@@ -253,9 +257,13 @@ function handleSignup(event) {
             // Store user data in sessionStorage
             sessionStorage.setItem("user", JSON.stringify(data.user));
             
-            // Redirect to dashboard after short delay
+            // Redirect: participants -> student home; others -> dashboard
             setTimeout(() => {
-                showDashboard(data.user);
+                if (data.user.role === "participant") {
+                    window.location.href = "/student-home";
+                } else {
+                    showDashboard(data.user);
+                }
             }, 1000);
         } else {
             // Show error message

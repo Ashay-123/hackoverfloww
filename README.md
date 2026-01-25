@@ -1,153 +1,113 @@
-# RBAC Login System
+# Campus Resource & Event Management System
 
-A complete Role-Based Access Control (RBAC) login system with email/password authentication, supporting three user roles: Admin, Organizer, and Participant.
+A full-stack web platform for managing campus resources, student clubs/committees, and events — with role-based access (Admin, Organizer, Participant) and a dedicated **Student Home** for participants.
 
 ## Features
 
-- ✅ Email/password authentication
-- ✅ Role-Based Access Control (RBAC) with three roles:
-  - **Admin**: Full system access
-  - **Organizer**: Event management access
-  - **Participant**: Basic participant access
-- ✅ Secure password hashing with bcrypt
-- ✅ SQLite database for user storage
-- ✅ Modern, responsive UI
-- ✅ Role-specific dashboards
+- **Authentication**: Email/password, RBAC (admin, organizer, participant)
+- **Student Home** (participant):
+  - **Profile**: name, department, year, phone, bio, **visibility** (public / internal / private)
+  - **Clubs & committees**: member of, heads/coordinates; explore and join
+  - **Events**: explore approved events, register, view my registered
+  - **Resources**: catalog (rooms, halls, labs, equipment), **my bookings**, request bookings (approval-based or auto)
+  - **Notifications**: approvals, rejections, reminders, booking updates; mark as read
+  - **Messages**: placeholder for 1:1 and group threads
+  - **Settings**: profile visibility, account
+- **Backend**: MySQL for users, profiles, clubs, events, resources, bookings, notifications, messages
 
 ## Tech Stack
 
-- **Frontend**: HTML5, CSS3, JavaScript (Vanilla)
-- **Backend**: Node.js with Express
-- **Database**: SQLite3
-- **Security**: bcrypt for password hashing
+- **Frontend**: HTML5, CSS3, JavaScript (vanilla)
+- **Backend**: Node.js, Express
+- **Database**: MySQL (via `mysql2`)
 
-## Installation
+## Setup
 
-1. **Install dependencies:**
-   ```bash
-   npm install
-   ```
+### 1. MySQL
 
-2. **Start the server:**
-   ```bash
-   npm start
-   ```
-   
-   Or for development with auto-reload:
-   ```bash
-   npm run dev
-   ```
+- Install and start MySQL.
+- Create DB and schema (from project root):
 
-3. **Open your browser:**
-   Navigate to `http://localhost:3000`
+  ```bash
+  mysql -u root -p < database.sql
+  ```
 
-## Database Setup
+  Or in MySQL:
 
-The database is automatically created when you first run the server. The SQLite database file (`database.db`) will be created in the project root.
+  ```sql
+  CREATE DATABASE IF NOT EXISTS campus_db;
+  USE campus_db;
+  -- then paste/run the rest of database.sql
+  ```
 
-### Default Test Accounts
+### 2. Dependencies
 
-The system comes with three pre-configured test accounts (password: `password123`):
+  ```bash
+  npm install
+  ```
 
-- **Admin**: `admin@example.com`
-- **Organizer**: `organizer@example.com`
-- **Participant**: `participant@example.com`
+### 3. Configure DB (optional)
 
-## Database Schema
+By default the app uses:
 
-The `database.sql` file contains the SQL schema that can be used with MySQL, PostgreSQL, or SQLite. The server uses SQLite by default.
+- Host: `localhost`
+- User: `root`
+- Password: `''`
+- Database: `campus_db`
 
-### Users Table Structure
+Override with env:
 
-```sql
-CREATE TABLE users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('admin', 'organizer', 'participant')) DEFAULT 'participant',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-```
+- `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`
 
-## API Endpoints
+### 4. Run
 
-### POST `/login`
-Authenticate a user with email and password.
+  ```bash
+  npm start
+  ```
 
-**Request Body:**
-```json
-{
-  "email": "user@example.com",
-  "password": "password123"
-}
-```
+  Open: `http://localhost:3000`
 
-**Success Response (200):**
-```json
-{
-  "success": true,
-  "message": "Login successful",
-  "user": {
-    "id": 1,
-    "email": "user@example.com",
-    "role": "admin"
-  }
-}
-```
+### 5. Test accounts
 
-**Error Response (401):**
-```json
-{
-  "success": false,
-  "message": "Invalid email or password"
-}
-```
+If the `users` table is empty, the server seeds:
 
-## Project Structure
+- **Admin**: `admin@example.com` / `password123`
+- **Organizer**: `organizer@example.com` / `password123`
+- **Participant**: `participant@example.com` / `password123`
+
+**Participant** login redirects to **Student Home** (`/student-home`).
+
+## Project structure
 
 ```
-hackoverflow/
-├── login.html          # Login page HTML
-├── style.css           # Styling
-├── script.js           # Frontend JavaScript
-├── server.js           # Node.js backend server
-├── database.sql        # SQL schema (for reference)
-├── package.json        # Node.js dependencies
-└── README.md          # This file
+├── login.html         # Login / sign-up
+├── script.js          # Login, redirect participants → student-home
+├── style.css          # Login styles
+├── student-home.html  # Student (participant) home
+├── student-home.css   # Student home styles
+├── student-home.js    # Student home logic & API calls
+├── server.js          # Express + MySQL, auth & API
+├── database.sql       # MySQL schema + seed (clubs, resources)
+├── package.json
+└── README.md
 ```
 
-## Security Features
+## API (overview)
 
-- Passwords are hashed using bcrypt (10 rounds)
-- SQL injection protection via parameterized queries
-- CORS enabled for cross-origin requests
-- Input validation on both client and server side
+- `POST /login`, `POST /register`
+- `GET /api/profile`, `PUT /api/profile`
+- `GET /api/profile/clubs`
+- `GET /api/clubs`, `POST /api/clubs/join`
+- `GET /api/events`, `GET /api/events/registered`, `POST /api/events/register`
+- `GET /api/resources`, `GET /api/resources/bookings`, `POST /api/resources/book`
+- `GET /api/notifications`, `PATCH /api/notifications/:id/read`
+- `GET /api/messages/threads`
 
-## Customization
+Requests that need the current user must send:
 
-### Adding New Roles
+`x-user-id: <user_id>`
 
-1. Update the database schema to include the new role
-2. Modify the `CHECK` constraint in the users table
-3. Add role-specific content in `script.js` → `getRoleContent()` function
-4. Update CSS for new role badge styles
-
-### Using Different Database
-
-To use MySQL or PostgreSQL instead of SQLite:
-
-1. Install the appropriate database driver (`mysql2` or `pg`)
-2. Update `server.js` to use the new database connection
-3. Use the appropriate SQL syntax from `database.sql`
-
-## Development
-
-The project uses:
-- **Express** for the web server
-- **bcrypt** for password hashing
-- **sqlite3** for database operations
-- **cors** for handling cross-origin requests
+(The student home sets this from the logged-in user in `sessionStorage`.)
 
 ## License
 
