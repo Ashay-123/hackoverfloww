@@ -69,6 +69,88 @@ function insertDefaultUsers() {
     });
 }
 
+// Register endpoint
+app.post('/register', async (req, res) => {
+    const { email, password, role } = req.body;
+
+    // Validation
+    if (!email || !password) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Email and password are required' 
+        });
+    }
+
+    if (password.length < 6) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Password must be at least 6 characters long' 
+        });
+    }
+
+    // Validate role
+    const validRoles = ['admin', 'organizer', 'participant'];
+    const userRole = role && validRoles.includes(role.toLowerCase()) 
+        ? role.toLowerCase() 
+        : 'participant';
+
+    // Check if user already exists
+    db.get(
+        'SELECT * FROM users WHERE email = ?',
+        [email],
+        async (err, existingUser) => {
+            if (err) {
+                return res.status(500).json({ 
+                    success: false, 
+                    message: 'Database error' 
+                });
+            }
+
+            if (existingUser) {
+                return res.status(409).json({ 
+                    success: false, 
+                    message: 'Email already registered. Please use a different email.' 
+                });
+            }
+
+            // Hash password
+            try {
+                const hashedPassword = await bcrypt.hash(password, 10);
+
+                // Insert new user
+                db.run(
+                    'INSERT INTO users (email, password, role) VALUES (?, ?, ?)',
+                    [email, hashedPassword, userRole],
+                    function(err) {
+                        if (err) {
+                            return res.status(500).json({ 
+                                success: false, 
+                                message: 'Error creating account. Please try again.' 
+                            });
+                        }
+
+                        // Return success with user info
+                        res.status(201).json({
+                            success: true,
+                            message: 'Account created successfully!',
+                            user: {
+                                id: this.lastID,
+                                email: email,
+                                role: userRole
+                            }
+                        });
+                    }
+                );
+            } catch (hashError) {
+                return res.status(500).json({ 
+                    success: false, 
+                    message: 'Error processing password' 
+                });
+            }
+        }
+    );
+});
+
 // Login endpoint
 app.post('/login', async (req, res) => {
     const { email, password } = req.body;
