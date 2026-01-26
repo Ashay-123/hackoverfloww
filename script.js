@@ -262,9 +262,9 @@ function handleSignup(event) {
             // Redirect: participants -> student home; organizers -> organizer home; others -> dashboard
             setTimeout(() => {
                 if (data.user.role === "participant") {
-                    window.location.href = "/student-home";
+                    window.location.href = "student-home.html";
                 } else if (data.user.role === "organizer") {
-                    window.location.href = "/organizer-home";
+                    window.location.href = "organizer-home.html";
                 } else {
                     showDashboard(data.user);
                 }

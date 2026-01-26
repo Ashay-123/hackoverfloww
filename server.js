@@ -4,15 +4,16 @@ const mysql = require('mysql2/promise');
 const path = require('path');
 const cors = require('cors');
 const session = require('express-session');
+require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 
 // MySQL config - set DB_HOST, DB_USER, DB_PASSWORD, DB_NAME in env or use defaults
 const dbConfig = {
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || 'Sans@1234',
+  password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'campus_db',
   waitForConnections: true,
   connectionLimit: 10,
@@ -65,7 +66,7 @@ async function initDb() {
 
 // Middleware
 app.use(cors({
-  origin: 'http://localhost:3000',
+  origin: `http://localhost:${PORT}`,
   credentials: true
 }));
 app.use(express.json());
