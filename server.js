@@ -7,16 +7,16 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// MySQL config - set DB_HOST, DB_USER, DB_PASSWORD, DB_NAME in env or use defaults
 const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'campus_db',
+  host: 'localhost',
+  user: 'root',
+  password: 'Root123!',
+  database: 'campus_db',
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
 };
+
 
 let pool;
 

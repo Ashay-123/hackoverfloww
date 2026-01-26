@@ -46,7 +46,7 @@ function handleLogin(event) {
             // Redirect: participants -> student home; others -> dashboard
             setTimeout(() => {
                 if (data.user.role === "participant") {
-                    window.location.href = "/student-home";
+                    window.location.href = "student-home.html";
                 } else {
                     showDashboard(data.user);
                 }
