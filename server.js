@@ -3,15 +3,23 @@ const bcrypt = require('bcrypt');
 const mysql = require('mysql2/promise');
 const path = require('path');
 const cors = require('cors');
+const session = require('express-session');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const dbConfig = {
+<<<<<<< HEAD
   host: 'localhost',
   user: 'root',
   password: 'Root123!', // <-- password yahan dal dena
   database: 'campus_db',
+=======
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || 'Sans@1234',
+  database: process.env.DB_NAME || 'campus_db',
+>>>>>>> badb78d21f6cbb6ceb0581811843541edbba4dc5
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
@@ -38,6 +46,14 @@ async function seedIfEmpty() {
     await pool.query('INSERT IGNORE INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
       [pid, 'Welcome', 'Welcome to Campus Resource & Event Management. Explore events and book resources.', 'general']);
   }
+  const [o] = await pool.query('SELECT id FROM users WHERE role = ?', ['organizer']);
+  const oid = o[0]?.id;
+  if (oid) {
+    await pool.query('INSERT IGNORE INTO user_profiles (user_id, full_name, profile_visibility) VALUES (?, ?, ?)',
+      [oid, 'Demo Organizer', 'internal']);
+    const [c] = await pool.query('SELECT id FROM clubs LIMIT 1');
+    if (c.length) await pool.query('INSERT IGNORE INTO club_members (club_id, user_id, role) VALUES (?, ?, ?)', [c[0].id, oid, 'head']);
+  }
   console.log('Seeded default users (admin/organizer/participant@example.com, password: password123)');
 }
 
@@ -55,14 +71,46 @@ async function initDb() {
 }
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: 'http://localhost:3000',
+  credentials: true
+}));
 app.use(express.json());
 app.use(express.static(__dirname));
 
-// Helper: get user id from header (in production use JWT/sessions)
+// Session configuration
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'campus-hub-secret-key-change-in-production',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: false, // Set to true in production with HTTPS
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
+
+// Auth middleware
+const requireAuth = (req, res, next) => {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  next();
+};
+
+const requireOrganizer = (req, res, next) => {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  if (req.session.role !== 'organizer') {
+    return res.status(403).json({ error: 'Organizer access required' });
+  }
+  next();
+};
+
+// Helper: get user id from session (backward compatibility with header for existing code)
 const getUserId = (req) => {
-  const id = req.headers['x-user-id'] || req.query.userId;
-  return id ? parseInt(id, 10) : null;
+  return req.session.userId || (req.headers['x-user-id'] ? parseInt(req.headers['x-user-id'], 10) : null);
 };
 
 // ==================== AUTH ====================
@@ -108,6 +156,10 @@ app.post('/login', async (req, res) => {
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
+    // Set session
+    req.session.userId = user.id;
+    req.session.role = user.role;
+    req.session.email = user.email;
     res.json({
       success: true,
       message: 'Login successful',
@@ -116,6 +168,15 @@ app.post('/login', async (req, res) => {
   } catch (e) {
     res.status(500).json({ success: false, message: 'Database error' });
   }
+});
+
+app.post('/logout', (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      return res.status(500).json({ success: false, message: 'Logout failed' });
+    }
+    res.json({ success: true, message: 'Logged out successfully' });
+  });
 });
 
 // ==================== USER PROFILE ====================
@@ -255,6 +316,259 @@ app.post('/api/events/register', async (req, res) => {
   }
 });
 
+// ==================== ORGANIZER: EVENT MANAGEMENT ====================
+
+// GET /api/organizer/events - List events created by organizer
+app.get('/api/organizer/events', requireOrganizer, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, title, description, event_date, start_time, end_time, location, online_link, 
+       max_participants, registration_deadline, status, created_at, updated_at
+       FROM events 
+       WHERE created_by = ?
+       ORDER BY event_date ASC, start_time ASC`,
+      [req.session.userId]
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('Error fetching events:', e);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// POST /api/events - Create event (organizer only)
+app.post('/api/events', requireOrganizer, async (req, res) => {
+  const { title, description, event_date, start_time, end_time, location, online_link, max_participants, registration_deadline } = req.body;
+  
+  // Validation
+  if (!title || !description || !event_date || !start_time || !end_time) {
+    return res.status(400).json({ error: 'Title, description, event_date, start_time, and end_time are required' });
+  }
+  
+  if (!location && !online_link) {
+    return res.status(400).json({ error: 'Either location or online_link must be provided' });
+  }
+  
+  if (end_time <= start_time) {
+    return res.status(400).json({ error: 'end_time must be after start_time' });
+  }
+  
+  const maxParts = parseInt(max_participants, 10);
+  if (isNaN(maxParts) || maxParts < 0) {
+    return res.status(400).json({ error: 'max_participants must be an integer >= 0' });
+  }
+  
+  if (registration_deadline) {
+    const eventStart = new Date(`${event_date}T${start_time}`);
+    const deadline = new Date(registration_deadline);
+    if (deadline >= eventStart) {
+      return res.status(400).json({ error: 'registration_deadline must be before event start' });
+    }
+  }
+  
+  try {
+    const [r] = await pool.query(
+      `INSERT INTO events (title, description, event_date, start_time, end_time, location, online_link, 
+       max_participants, registration_deadline, created_by, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+      [title, description, event_date, start_time, end_time, location || null, online_link || null, 
+       maxParts, registration_deadline || null, req.session.userId]
+    );
+    res.json({ message: 'Event created successfully', eventId: r.insertId });
+  } catch (e) {
+    console.error('Error creating event:', e);
+    if (e.code === 'ER_CHECK_CONSTRAINT_VIOLATED') {
+      return res.status(400).json({ error: 'Validation failed: end_time must be after start_time' });
+    }
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// PUT /api/events/:id - Update event (organizer only, own events)
+app.put('/api/events/:id', requireOrganizer, async (req, res) => {
+  const eventId = parseInt(req.params.id, 10);
+  const { title, description, event_date, start_time, end_time, location, online_link, max_participants, registration_deadline, status } = req.body;
+  
+  try {
+    // Check ownership
+    const [check] = await pool.query('SELECT created_by FROM events WHERE id = ?', [eventId]);
+    if (!check.length) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    if (check[0].created_by !== req.session.userId) {
+      return res.status(403).json({ error: 'Not authorized to update this event' });
+    }
+    
+    // Validation if fields are provided
+    if (start_time && end_time && end_time <= start_time) {
+      return res.status(400).json({ error: 'end_time must be after start_time' });
+    }
+    
+    if (max_participants !== undefined) {
+      const maxParts = parseInt(max_participants, 10);
+      if (isNaN(maxParts) || maxParts < 0) {
+        return res.status(400).json({ error: 'max_participants must be an integer >= 0' });
+      }
+    }
+    
+    if (registration_deadline && event_date && start_time) {
+      const eventStart = new Date(`${event_date}T${start_time}`);
+      const deadline = new Date(registration_deadline);
+      if (deadline >= eventStart) {
+        return res.status(400).json({ error: 'registration_deadline must be before event start' });
+      }
+    }
+    
+    // Build update query
+    const updates = [];
+    const values = [];
+    if (title !== undefined) { updates.push('title = ?'); values.push(title); }
+    if (description !== undefined) { updates.push('description = ?'); values.push(description); }
+    if (event_date !== undefined) { updates.push('event_date = ?'); values.push(event_date); }
+    if (start_time !== undefined) { updates.push('start_time = ?'); values.push(start_time); }
+    if (end_time !== undefined) { updates.push('end_time = ?'); values.push(end_time); }
+    if (location !== undefined) { updates.push('location = ?'); values.push(location); }
+    if (online_link !== undefined) { updates.push('online_link = ?'); values.push(online_link); }
+    if (max_participants !== undefined) { updates.push('max_participants = ?'); values.push(parseInt(max_participants, 10)); }
+    if (registration_deadline !== undefined) { updates.push('registration_deadline = ?'); values.push(registration_deadline || null); }
+    if (status !== undefined) { updates.push('status = ?'); values.push(status); }
+    
+    if (updates.length === 0) {
+      return res.json({ message: 'No changes provided' });
+    }
+    
+    values.push(eventId);
+    const [result] = await pool.query(`UPDATE events SET ${updates.join(', ')} WHERE id = ?`, values);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Event not found or no changes made' });
+    }
+    
+    res.json({ message: 'Event updated successfully' });
+  } catch (e) {
+    console.error('Error updating event:', e);
+    if (e.code === 'ER_CHECK_CONSTRAINT_VIOLATED') {
+      return res.status(400).json({ error: 'Validation failed: end_time must be after start_time' });
+    }
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// DELETE /api/events/:id - Delete event (organizer only, own events)
+app.delete('/api/events/:id', requireOrganizer, async (req, res) => {
+  const eventId = parseInt(req.params.id, 10);
+  
+  try {
+    const [check] = await pool.query('SELECT created_by, status FROM events WHERE id = ?', [eventId]);
+    if (!check.length) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    if (check[0].created_by !== req.session.userId) {
+      return res.status(403).json({ error: 'Not authorized to delete this event' });
+    }
+    
+    // If published, soft-close instead of delete
+    if (check[0].status === 'published') {
+      await pool.query('UPDATE events SET status = ? WHERE id = ?', ['closed', eventId]);
+      return res.json({ message: 'Published event closed instead of deleted' });
+    }
+    
+    // Delete draft or closed events
+    await pool.query('DELETE FROM events WHERE id = ?', [eventId]);
+    res.json({ message: 'Event deleted successfully' });
+  } catch (e) {
+    console.error('Error deleting event:', e);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// POST /api/events/:id/publish - Publish event
+app.post('/api/events/:id/publish', requireOrganizer, async (req, res) => {
+  const eventId = parseInt(req.params.id, 10);
+  
+  try {
+    const [check] = await pool.query('SELECT created_by, status FROM events WHERE id = ?', [eventId]);
+    if (!check.length) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    if (check[0].created_by !== req.session.userId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    
+    await pool.query('UPDATE events SET status = ? WHERE id = ?', ['published', eventId]);
+    res.json({ message: 'Event published successfully' });
+  } catch (e) {
+    console.error('Error publishing event:', e);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// POST /api/events/:id/close - Close event
+app.post('/api/events/:id/close', requireOrganizer, async (req, res) => {
+  const eventId = parseInt(req.params.id, 10);
+  
+  try {
+    const [check] = await pool.query('SELECT created_by FROM events WHERE id = ?', [eventId]);
+    if (!check.length) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    if (check[0].created_by !== req.session.userId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    
+    await pool.query('UPDATE events SET status = ? WHERE id = ?', ['closed', eventId]);
+    res.json({ message: 'Event closed successfully' });
+  } catch (e) {
+    console.error('Error closing event:', e);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+app.get('/api/events/:id/registrations', async (req, res) => {
+  const uid = getUserId(req);
+  if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
+  const eventId = parseInt(req.params.id, 10);
+  try {
+    const [check] = await pool.query('SELECT created_by FROM events WHERE id = ?', [eventId]);
+    if (!check.length) return res.status(404).json({ success: false, message: 'Event not found' });
+    if (check[0].created_by !== uid) return res.status(403).json({ success: false, message: 'Not authorized' });
+    const [rows] = await pool.query(
+      `SELECT er.id, er.status, er.registered_at, u.id as user_id, u.email, up.full_name, up.department
+       FROM event_registrations er
+       JOIN users u ON u.id = er.user_id
+       LEFT JOIN user_profiles up ON up.user_id = u.id
+       WHERE er.event_id = ?
+       ORDER BY er.registered_at DESC`,
+      [eventId]
+    );
+    res.json({ success: true, registrations: rows });
+  } catch (e) {
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.post('/api/events/:id/notify', async (req, res) => {
+  const uid = getUserId(req);
+  if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
+  const eventId = parseInt(req.params.id, 10);
+  const { title, message, type } = req.body;
+  if (!title || !message) return res.status(400).json({ success: false, message: 'title and message required' });
+  try {
+    const [check] = await pool.query('SELECT created_by FROM events WHERE id = ?', [eventId]);
+    if (!check.length) return res.status(404).json({ success: false, message: 'Event not found' });
+    if (check[0].created_by !== uid) return res.status(403).json({ success: false, message: 'Not authorized' });
+    const [regs] = await pool.query('SELECT user_id FROM event_registrations WHERE event_id = ? AND status != ?', [eventId, 'cancelled']);
+    const notifType = type || 'general';
+    for (const reg of regs) {
+      await pool.query('INSERT INTO notifications (user_id, title, message, type, ref_type, ref_id) VALUES (?, ?, ?, ?, ?, ?)',
+        [reg.user_id, title, message, notifType, 'event', eventId]);
+    }
+    res.json({ success: true, message: `Notification sent to ${regs.length} participants` });
+  } catch (e) {
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
 // ==================== RESOURCES ====================
 
 app.get('/api/resources', async (req, res) => {
@@ -358,6 +672,7 @@ app.get('/api/messages/threads', async (req, res) => {
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'login.html')));
 app.get('/student-home', (req, res) => res.sendFile(path.join(__dirname, 'student-home.html')));
+app.get('/organizer-home', (req, res) => res.sendFile(path.join(__dirname, 'organizer-home.html')));
 
 // ==================== SERVER ====================
 

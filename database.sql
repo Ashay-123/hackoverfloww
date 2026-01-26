@@ -64,31 +64,48 @@ CREATE INDEX idx_club_members_club ON club_members(club_id);
 CREATE INDEX idx_club_members_user ON club_members(user_id);
 
 -- ==================== EVENTS ====================
+-- Drop existing events table if it exists (migration)
+DROP TABLE IF EXISTS event_clubs;
+DROP TABLE IF EXISTS event_registrations;
+DROP TABLE IF EXISTS events;
+
 CREATE TABLE IF NOT EXISTS events (
     id INT PRIMARY KEY AUTO_INCREMENT,
     title VARCHAR(255) NOT NULL,
-    description TEXT,
-    club_id INT,
-    status ENUM('draft', 'pending_approval', 'approved', 'rejected', 'completed') DEFAULT 'draft',
-    start_date DATE NOT NULL,
-    end_date DATE,
-    start_time TIME,
-    end_time TIME,
-    venue VARCHAR(255),
-    budget DECIMAL(12,2) DEFAULT 0,
-    is_multi_club TINYINT(1) DEFAULT 0,
-    created_by INT,
-    approved_by INT,
+    description TEXT NOT NULL,
+    event_date DATE NOT NULL,
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    location VARCHAR(255) NULL,
+    online_link VARCHAR(255) NULL,
+    max_participants INT DEFAULT 0 NOT NULL,
+    registration_deadline DATETIME NULL,
+    status ENUM('draft', 'published', 'closed') DEFAULT 'draft' NOT NULL,
+    created_by INT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE SET NULL,
-    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-    FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT chk_end_after_start CHECK (end_time > start_time),
+    CONSTRAINT chk_max_participants CHECK (max_participants >= 0)
 );
 
+CREATE INDEX idx_events_organizer_date ON events(created_by, event_date);
 CREATE INDEX idx_events_status ON events(status);
-CREATE INDEX idx_events_dates ON events(start_date, end_date);
-CREATE INDEX idx_events_club ON events(club_id);
+
+-- Recreate event_registrations for backward compatibility (if needed)
+CREATE TABLE IF NOT EXISTS event_registrations (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    event_id INT NOT NULL,
+    user_id INT NOT NULL,
+    status ENUM('registered', 'cancelled', 'attended') DEFAULT 'registered',
+    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_registration (event_id, user_id),
+    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_registrations_user ON event_registrations(user_id);
+CREATE INDEX idx_registrations_event ON event_registrations(event_id);
 
 -- Joint events: multiple clubs per event
 CREATE TABLE IF NOT EXISTS event_clubs (
@@ -226,7 +243,17 @@ INSERT INTO clubs (name, slug, description, type) VALUES
 ('Cultural Committee', 'cultural-committee', 'Events and cultural activities', 'committee'),
 ('Sports Club', 'sports-club', 'Sports and fitness', 'club');
 
--- Sample approved event (1 week from now)
-INSERT INTO events (title, description, club_id, status, start_date, start_time, venue)
-SELECT 'Tech Talk', 'Monthly tech meetup and coding discussion', id, 'approved', DATE_ADD(CURDATE(), INTERVAL 7 DAY), '18:00:00', 'Main Hall'
-FROM clubs WHERE slug = 'tech-club' LIMIT 1;
+-- Sample event for organizer (1 week from now)
+-- Note: This will only work if organizer user exists
+INSERT INTO events (title, description, event_date, start_time, end_time, location, max_participants, status, created_by)
+SELECT 
+    'Tech Talk 2024',
+    'Monthly tech meetup and coding discussion. Join us for an evening of learning and networking.',
+    DATE_ADD(CURDATE(), INTERVAL 7 DAY),
+    '18:00:00',
+    '20:00:00',
+    'Main Hall',
+    50,
+    'published',
+    id
+FROM users WHERE role = 'organizer' LIMIT 1;
