@@ -1,0 +1,65 @@
+# Campus Resource & Event Management System
+# Docker Compose Configuration
+# Run with: docker compose up --build
+
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8
+    container_name: campus_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-Root123!}
+      MYSQL_DATABASE: ${DB_NAME:-campus_db}
+      MYSQL_USER: ${DB_USER:-root}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-Root123!}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - campus_network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: campus_app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      PORT: ${PORT:-3000}
+      DB_HOST: mysql
+      DB_USER: ${DB_USER:-root}
+      DB_PASSWORD: ${DB_PASSWORD:-Root123!}
+      DB_NAME: ${DB_NAME:-campus_db}
+      SESSION_SECRET: ${SESSION_SECRET:-campus-hub-secret-key-change-in-production}
+      NODE_ENV: ${NODE_ENV:-production}
+    ports:
+      - "${PORT:-3000}:3000"
+    networks:
+      - campus_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  campus_network:
+    driver: bridge

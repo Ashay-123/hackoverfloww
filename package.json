@@ -18,10 +18,7 @@
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
     "express": "^4.18.2",
-<<<<<<< HEAD
-=======
     "express-session": "^1.17.3",
->>>>>>> badb78d21f6cbb6ceb0581811843541edbba4dc5
     "mysql2": "^3.16.1"
   },
   "devDependencies": {

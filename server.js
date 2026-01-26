@@ -1,3 +1,9 @@
+/**
+ * Campus Resource & Event Management System
+ * Node.js + Express + MySQL Backend Server
+ * Docker-ready configuration with environment variables
+ */
+
 const express = require('express');
 const bcrypt = require('bcrypt');
 const mysql = require('mysql2/promise');
@@ -8,29 +14,56 @@ const session = require('express-session');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Database configuration from environment variables
 const dbConfig = {
-<<<<<<< HEAD
-  host: 'localhost',
-  user: 'root',
-  password: 'Root123!', // <-- password yahan dal dena
-  database: 'campus_db',
-=======
-  host: process.env.DB_HOST || 'localhost',
+  host: process.env.DB_HOST || 'mysql',
   user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || 'Sans@1234',
+  password: process.env.DB_PASSWORD || 'Root123!',
   database: process.env.DB_NAME || 'campus_db',
->>>>>>> badb78d21f6cbb6ceb0581811843541edbba4dc5
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
 };
 
-
 let pool;
 
+// Wait for MySQL to be ready
+async function waitForMySQL(maxRetries = 30, delay = 2000) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const testPool = mysql.createPool({
+        ...dbConfig,
+        connectionLimit: 1
+      });
+      await testPool.query('SELECT 1');
+      await testPool.end();
+      console.log('MySQL is ready');
+      return true;
+    } catch (err) {
+      if (i === maxRetries - 1) {
+        throw err;
+      }
+      console.log(`Waiting for MySQL... (${i + 1}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
 async function seedIfEmpty() {
-  const [r] = await pool.query('SELECT COUNT(*) as c FROM users');
-  if (r[0].c > 0) return;
+  try {
+    // Check if users table exists and has data
+    const [r] = await pool.query('SELECT COUNT(*) as c FROM users');
+    if (r[0].c > 0) {
+      console.log('Database already seeded, skipping...');
+      return;
+    }
+  } catch (err) {
+    // Table might not exist yet (shouldn't happen if MySQL init works)
+    console.warn('Users table not found, seeding will be skipped:', err.message);
+    return;
+  }
+  
+  try {
   const hp = await bcrypt.hash('password123', 10);
   await pool.query(
     `INSERT INTO users (email, password, role) VALUES (?, ?, 'admin'), (?, ?, 'organizer'), (?, ?, 'participant')`,
@@ -54,18 +87,63 @@ async function seedIfEmpty() {
     const [c] = await pool.query('SELECT id FROM clubs LIMIT 1');
     if (c.length) await pool.query('INSERT IGNORE INTO club_members (club_id, user_id, role) VALUES (?, ?, ?)', [c[0].id, oid, 'head']);
   }
-  console.log('Seeded default users (admin/organizer/participant@example.com, password: password123)');
+    console.log('Seeded default users (admin/organizer/participant@example.com, password: password123)');
+  } catch (err) {
+    console.error('Error during seeding:', err.message);
+    throw err;
+  }
 }
 
 async function initDb() {
   try {
+    // Wait for MySQL to be ready (important for Docker)
+    await waitForMySQL();
+    
+    // Create connection pool
     pool = mysql.createPool(dbConfig);
+    
+    // Test connection and ensure database is accessible
     await pool.query('SELECT 1');
-    console.log('Connected to MySQL database');
-    await seedIfEmpty();
+    console.log(`Connected to MySQL database at ${dbConfig.host}`);
+    
+    // Verify database exists (MySQL container creates it automatically via docker-entrypoint-initdb.d)
+    try {
+      await pool.query(`USE ${dbConfig.database}`);
+      console.log(`Using database: ${dbConfig.database}`);
+    } catch (dbErr) {
+      // If database doesn't exist, try to create it
+      console.log(`Database ${dbConfig.database} not found, attempting to create...`);
+      const adminPool = mysql.createPool({
+        host: dbConfig.host,
+        user: dbConfig.user,
+        password: dbConfig.password,
+        waitForConnections: true,
+        connectionLimit: 1
+      });
+      try {
+        await adminPool.query(`CREATE DATABASE IF NOT EXISTS ${dbConfig.database}`);
+        await adminPool.end();
+        // Recreate pool with database
+        await pool.end();
+        pool = mysql.createPool(dbConfig);
+        await pool.query('SELECT 1');
+        console.log(`Database ${dbConfig.database} created and ready`);
+      } catch (createErr) {
+        await adminPool.end();
+        throw createErr;
+      }
+    }
+    
+    // Run seeding (only if tables exist - they should from database.sql)
+    try {
+      await seedIfEmpty();
+    } catch (seedErr) {
+      console.warn('Seeding skipped or failed (tables may not exist yet):', seedErr.message);
+      console.warn('This is normal on first run. Database schema should be initialized by MySQL container.');
+    }
   } catch (err) {
-    console.error('MySQL connection failed. Ensure MySQL is running and database "campus_db" exists. Run database.sql first.');
-    console.error(err.message);
+    console.error('MySQL connection failed. Ensure MySQL is running and database is accessible.');
+    console.error('Error:', err.message);
     process.exit(1);
   }
 }
