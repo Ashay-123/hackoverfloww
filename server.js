@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 const dbConfig = {
   host: 'localhost',
   user: 'root',
-  password: 'Root123!',
+  password: 'Root123!', // <-- password yahan dal dena
   database: 'campus_db',
   waitForConnections: true,
   connectionLimit: 10,
