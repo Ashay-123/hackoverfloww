@@ -92,21 +92,6 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX idx_events_organizer_date ON events(created_by, event_date);
 CREATE INDEX idx_events_status ON events(status);
 
--- Recreate event_registrations for backward compatibility (if needed)
-CREATE TABLE IF NOT EXISTS event_registrations (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    event_id INT NOT NULL,
-    user_id INT NOT NULL,
-    status ENUM('registered', 'cancelled', 'attended') DEFAULT 'registered',
-    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY unique_registration (event_id, user_id),
-    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-
-CREATE INDEX idx_registrations_user ON event_registrations(user_id);
-CREATE INDEX idx_registrations_event ON event_registrations(event_id);
-
 -- Joint events: multiple clubs per event
 CREATE TABLE IF NOT EXISTS event_clubs (
     id INT PRIMARY KEY AUTO_INCREMENT,

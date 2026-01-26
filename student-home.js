@@ -197,9 +197,9 @@
     get('/api/events').then(r => {
       const arr = r.events || [];
       el.innerHTML = arr.length ? arr.map(e => {
-        const d = formatDate(e.start_date);
+        const d = formatDate(e.event_date);
         const reg = '<button type="button" class="btn btn-ghost" style="margin:0" data-event-id="' + e.id + '">Register</button>';
-        return '<div class="item-row"><div><h4>' + escapeHtml(e.title) + '</h4><p class="meta">' + d + (e.venue ? ' • ' + escapeHtml(e.venue) : '') + (e.club_name ? ' • ' + escapeHtml(e.club_name) : '') + '</p></div>' + reg + '</div>';
+        return '<div class="item-row"><div><h4>' + escapeHtml(e.title) + '</h4><p class="meta">' + d + (e.location ? ' • ' + escapeHtml(e.location) : '') + (e.club_name ? ' • ' + escapeHtml(e.club_name) : '') + '</p></div>' + reg + '</div>';
       }).join('') : '<p class="muted">No approved events.</p>';
       el.querySelectorAll('[data-event-id]').forEach(btn => {
         btn.addEventListener('click', function () { registerEvent(parseInt(this.dataset.eventId, 10)); });
@@ -213,8 +213,8 @@
     get('/api/events/registered').then(r => {
       const arr = r.events || [];
       el.innerHTML = arr.length ? arr.map(e => {
-        const d = formatDate(e.start_date);
-        return '<div class="item-row"><div><h4>' + escapeHtml(e.title) + '</h4><p class="meta">' + d + (e.venue ? ' • ' + escapeHtml(e.venue) : '') + (e.club_name ? ' • ' + escapeHtml(e.club_name) : '') + '</p><span class="status ' + (e.reg_status || 'registered') + '">' + (e.reg_status || 'registered') + '</span></div></div>';
+        const d = formatDate(e.event_date);
+        return '<div class="item-row"><div><h4>' + escapeHtml(e.title) + '</h4><p class="meta">' + d + (e.location ? ' • ' + escapeHtml(e.location) : '') + (e.club_name ? ' • ' + escapeHtml(e.club_name) : '') + '</p><span class="status ' + (e.reg_status || 'registered') + '">' + (e.reg_status || 'registered') + '</span></div></div>';
       }).join('') : '<p class="muted">No registered events.</p>';
     }).catch(() => { el.innerHTML = '<p class="muted">Could not load.</p>'; });
   }
@@ -232,7 +232,7 @@
     get('/api/events').then(r => {
       const arr = (r.events || []).slice(0, 4);
       el.innerHTML = arr.length ? '<ul class="list">' + arr.map(e =>
-        '<li>' + escapeHtml(e.title) + ' <span class="muted">' + formatDate(e.start_date) + '</span></li>'
+        '<li>' + escapeHtml(e.title) + ' <span class="muted">' + formatDate(e.event_date) + '</span></li>'
       ).join('') + '</ul>' : '<span class="empty">No upcoming events.</span>';
     });
   }

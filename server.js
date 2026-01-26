@@ -22,6 +22,14 @@ const dbConfig = {
 
 let pool;
 
+// Ensure target database exists before creating the pool
+async function ensureDatabaseExists() {
+  const { database, ...baseConfig } = dbConfig;
+  const conn = await mysql.createConnection({ ...baseConfig, multipleStatements: true });
+  await conn.query(`CREATE DATABASE IF NOT EXISTS \`${database}\``);
+  await conn.end();
+}
+
 async function seedIfEmpty() {
   const [r] = await pool.query('SELECT COUNT(*) as c FROM users');
   if (r[0].c > 0) return;
@@ -53,12 +61,14 @@ async function seedIfEmpty() {
 
 async function initDb() {
   try {
+    await ensureDatabaseExists();
     pool = mysql.createPool(dbConfig);
     await pool.query('SELECT 1');
     console.log('Connected to MySQL database');
     await seedIfEmpty();
   } catch (err) {
-    console.error('MySQL connection failed. Ensure MySQL is running and database "campus_db" exists. Run database.sql first.');
+    console.error('MySQL connection failed. Check that MySQL is running, credentials are correct, and the schema is loaded (database.sql).');
+    console.error(`Tried config -> host:${dbConfig.host} user:${dbConfig.user} db:${dbConfig.database}`);
     console.error(err.message);
     process.exit(1);
   }
@@ -66,7 +76,7 @@ async function initDb() {
 
 // Middleware
 app.use(cors({
-  origin: `http://localhost:${PORT}`,
+  origin: true, // Allow all origins for development (use specific origin in production)
   credentials: true
 }));
 app.use(express.json());
@@ -264,15 +274,32 @@ app.post('/api/clubs/join', async (req, res) => {
 app.get('/api/events', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT e.id, e.title, e.description, e.status, e.start_date, e.end_date, e.start_time, e.end_time, e.venue, c.name as club_name
+      `SELECT 
+         e.id,
+         e.title,
+         e.description,
+         e.status,
+         e.event_date,
+         e.start_time,
+         e.end_time,
+         e.location,
+         e.online_link,
+         e.max_participants,
+         e.registration_deadline,
+         (
+           SELECT GROUP_CONCAT(c.name SEPARATOR ', ')
+           FROM event_clubs ec
+           JOIN clubs c ON c.id = ec.club_id
+           WHERE ec.event_id = e.id
+         ) AS club_name
        FROM events e
-       LEFT JOIN clubs c ON c.id = e.club_id
-       WHERE e.status IN ('approved', 'completed')
-       ORDER BY e.start_date DESC, e.start_time DESC
+       WHERE e.status IN ('published', 'closed')
+       ORDER BY e.event_date DESC, e.start_time DESC
        LIMIT 50`
     );
     res.json({ success: true, events: rows });
   } catch (e) {
+    console.error('Error fetching events list:', e);
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });
@@ -282,17 +309,48 @@ app.get('/api/events/registered', async (req, res) => {
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   try {
     const [rows] = await pool.query(
-      `SELECT e.id, e.title, e.start_date, e.end_date, e.start_time, e.venue, er.status as reg_status, c.name as club_name
+      `SELECT 
+         e.id,
+         e.title,
+         e.event_date,
+         e.start_time,
+         e.end_time,
+         e.location,
+         er.status as reg_status,
+         (
+           SELECT GROUP_CONCAT(c.name SEPARATOR ', ')
+           FROM event_clubs ec
+           JOIN clubs c ON c.id = ec.club_id
+           WHERE ec.event_id = e.id
+         ) AS club_name
        FROM event_registrations er
        JOIN events e ON e.id = er.event_id
-       LEFT JOIN clubs c ON c.id = e.club_id
        WHERE er.user_id = ? AND er.status != 'cancelled'
-       ORDER BY e.start_date DESC
+       ORDER BY e.event_date DESC, e.start_time DESC
        LIMIT 50`,
       [uid]
     );
     res.json({ success: true, events: rows });
   } catch (e) {
+    console.error('Error fetching registered events:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+// Organizer helper: list own events with success flag (used by modals)
+app.get('/api/events/my-events', requireOrganizer, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, title, description, event_date, start_time, end_time, location, online_link,
+              max_participants, registration_deadline, status, created_at, updated_at
+       FROM events
+       WHERE created_by = ?
+       ORDER BY event_date ASC, start_time ASC`,
+      [req.session.userId]
+    );
+    res.json({ success: true, events: rows });
+  } catch (e) {
+    console.error('Error fetching organizer my-events:', e);
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });
@@ -334,6 +392,11 @@ app.get('/api/organizer/events', requireOrganizer, async (req, res) => {
 app.post('/api/events', requireOrganizer, async (req, res) => {
   const { title, description, event_date, start_time, end_time, location, online_link, max_participants, registration_deadline } = req.body;
   
+  // Ensure session has userId
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Session expired. Please log in again.' });
+  }
+  
   // Validation
   if (!title || !description || !event_date || !start_time || !end_time) {
     return res.status(400).json({ error: 'Title, description, event_date, start_time, and end_time are required' });
@@ -352,12 +415,19 @@ app.post('/api/events', requireOrganizer, async (req, res) => {
     return res.status(400).json({ error: 'max_participants must be an integer >= 0' });
   }
   
+  // Validate and format registration_deadline
+  let formattedDeadline = null;
   if (registration_deadline) {
-    const eventStart = new Date(`${event_date}T${start_time}`);
     const deadline = new Date(registration_deadline);
+    if (isNaN(deadline.getTime())) {
+      return res.status(400).json({ error: 'Invalid registration deadline format' });
+    }
+    const eventStart = new Date(`${event_date}T${start_time}`);
     if (deadline >= eventStart) {
       return res.status(400).json({ error: 'registration_deadline must be before event start' });
     }
+    // Format as MySQL DATETIME: YYYY-MM-DD HH:MM:SS
+    formattedDeadline = deadline.toISOString().slice(0, 19).replace('T', ' ');
   }
   
   try {
@@ -366,15 +436,22 @@ app.post('/api/events', requireOrganizer, async (req, res) => {
        max_participants, registration_deadline, created_by, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
       [title, description, event_date, start_time, end_time, location || null, online_link || null, 
-       maxParts, registration_deadline || null, req.session.userId]
+       maxParts, formattedDeadline, req.session.userId]
     );
     res.json({ message: 'Event created successfully', eventId: r.insertId });
   } catch (e) {
     console.error('Error creating event:', e);
+    console.error('Error code:', e.code);
+    console.error('Error sqlMessage:', e.sqlMessage);
+    console.error('Session userId:', req.session.userId);
+    
     if (e.code === 'ER_CHECK_CONSTRAINT_VIOLATED') {
       return res.status(400).json({ error: 'Validation failed: end_time must be after start_time' });
     }
-    res.status(500).json({ error: 'Database error' });
+    if (e.code === 'ER_BAD_NULL_ERROR' || e.code === 'ER_NO_REFERENCED_ROW_2') {
+      return res.status(400).json({ error: 'Invalid user session. Please log out and log in again.' });
+    }
+    res.status(500).json({ error: 'Database error: ' + (e.sqlMessage || e.message) });
   }
 });
 
@@ -405,11 +482,24 @@ app.put('/api/events/:id', requireOrganizer, async (req, res) => {
       }
     }
     
-    if (registration_deadline && event_date && start_time) {
-      const eventStart = new Date(`${event_date}T${start_time}`);
-      const deadline = new Date(registration_deadline);
-      if (deadline >= eventStart) {
-        return res.status(400).json({ error: 'registration_deadline must be before event start' });
+    // Validate and format registration_deadline if provided
+    let formattedDeadline = undefined;
+    if (registration_deadline !== undefined) {
+      if (registration_deadline) {
+        const deadline = new Date(registration_deadline);
+        if (isNaN(deadline.getTime())) {
+          return res.status(400).json({ error: 'Invalid registration deadline format' });
+        }
+        if (event_date && start_time) {
+          const eventStart = new Date(`${event_date}T${start_time}`);
+          if (deadline >= eventStart) {
+            return res.status(400).json({ error: 'registration_deadline must be before event start' });
+          }
+        }
+        // Format as MySQL DATETIME: YYYY-MM-DD HH:MM:SS
+        formattedDeadline = deadline.toISOString().slice(0, 19).replace('T', ' ');
+      } else {
+        formattedDeadline = null;
       }
     }
     
@@ -424,7 +514,7 @@ app.put('/api/events/:id', requireOrganizer, async (req, res) => {
     if (location !== undefined) { updates.push('location = ?'); values.push(location); }
     if (online_link !== undefined) { updates.push('online_link = ?'); values.push(online_link); }
     if (max_participants !== undefined) { updates.push('max_participants = ?'); values.push(parseInt(max_participants, 10)); }
-    if (registration_deadline !== undefined) { updates.push('registration_deadline = ?'); values.push(registration_deadline || null); }
+    if (formattedDeadline !== undefined) { updates.push('registration_deadline = ?'); values.push(formattedDeadline); }
     if (status !== undefined) { updates.push('status = ?'); values.push(status); }
     
     if (updates.length === 0) {

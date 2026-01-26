@@ -473,6 +473,11 @@
     }
     
     const eventId = $('eventId').value;
+    
+    // Prepare registration deadline - only include if it has a valid value
+    const regDeadlineValue = $('eRegDeadline').value.trim();
+    const regDeadline = regDeadlineValue ? regDeadlineValue : null;
+    
     const data = {
       title: $('eTitle').value.trim(),
       description: $('eDescription').value.trim(),
@@ -482,7 +487,7 @@
       location: currentMode === 'inperson' ? $('eLocation').value.trim() : null,
       online_link: currentMode === 'online' ? $('eOnlineLink').value.trim() : null,
       max_participants: parseInt($('eMaxParticipants').value, 10) || 0,
-      registration_deadline: $('eRegDeadline').value || null
+      registration_deadline: regDeadline
     };
     
     const btn = $('saveDraftBtn');
@@ -518,6 +523,11 @@
     }
     
     const eventId = $('eventId').value;
+    
+    // Prepare registration deadline - only include if it has a valid value
+    const regDeadlineValue = $('eRegDeadline').value.trim();
+    const regDeadline = regDeadlineValue ? regDeadlineValue : null;
+    
     const data = {
       title: $('eTitle').value.trim(),
       description: $('eDescription').value.trim(),
@@ -527,7 +537,7 @@
       location: currentMode === 'inperson' ? $('eLocation').value.trim() : null,
       online_link: currentMode === 'online' ? $('eOnlineLink').value.trim() : null,
       max_participants: parseInt($('eMaxParticipants').value, 10) || 0,
-      registration_deadline: $('eRegDeadline').value || null,
+      registration_deadline: regDeadline,
       status: 'published'
     };
     
