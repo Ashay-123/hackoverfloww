@@ -20,7 +20,7 @@ function handleLogin(event) {
     btnLoader.style.display = "block";
     
     // Send login request
-    fetch("http://localhost:3000/login", {
+    fetch("/login", {
         method: "POST",
         headers: {
             "Content-Type": "application/json"
@@ -236,7 +236,7 @@ function handleSignup(event) {
     btnLoader.style.display = "block";
     
     // Send sign-up request
-    fetch("http://localhost:3000/register", {
+    fetch("/register", {
         method: "POST",
         headers: {
             "Content-Type": "application/json"
@@ -262,9 +262,9 @@ function handleSignup(event) {
             // Redirect: participants -> student home; organizers -> organizer home; others -> dashboard
             setTimeout(() => {
                 if (data.user.role === "participant") {
-                    window.location.href = "student-home.html";
+                    window.location.href = "/student-home";
                 } else if (data.user.role === "organizer") {
-                    window.location.href = "organizer-home.html";
+                    window.location.href = "/organizer-home";
                 } else {
                     showDashboard(data.user);
                 }

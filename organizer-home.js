@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const API = 'http://localhost:3000';
+  const API = '';
   let user = null;
   let currentEventId = null;
 
