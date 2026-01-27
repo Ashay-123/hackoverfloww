@@ -81,14 +81,17 @@ If the `users` table is empty, the server seeds:
 ## Project structure
 
 ```
-├── login.html         # Login / sign-up
-├── script.js          # Login, redirect participants → student-home
-├── style.css          # Login styles
-├── student-home.html  # Student (participant) home
-├── student-home.css   # Student home styles
-├── student-home.js    # Student home logic & API calls
-├── server.js          # Express + MySQL, auth & API
-├── database.sql       # MySQL schema + seed (clubs, resources)
+├── public/
+│  ├── login.html         # Login / sign-up
+│  ├── script.js          # Login, redirect participants → student-home
+│  ├── style.css          # Login styles
+│  ├── student-home.html  # Student (participant) home
+│  ├── student-home.css   # Student home styles
+│  ├── student-home.js    # Student home logic & API calls
+│  ├── organizer-home.*   # Organizer home files
+│  └── admin-home.*       # Admin home files
+├── server.js             # Express + MySQL, auth & API
+├── database.sql          # MySQL schema + seed (clubs, resources)
 ├── package.json
 └── README.md
 ```
@@ -104,11 +107,8 @@ If the `users` table is empty, the server seeds:
 - `GET /api/notifications`, `PATCH /api/notifications/:id/read`
 - `GET /api/messages/threads`
 
-Requests that need the current user must send:
-
-`x-user-id: <user_id>`
-
-(The student home sets this from the logged-in user in `sessionStorage`.)
+Requests that need the current user rely on the session cookie.
+Make sure `credentials: "include"` is set on fetch calls.
 
 ## License
 

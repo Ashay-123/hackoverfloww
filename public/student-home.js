@@ -28,8 +28,7 @@
   }
 
   function headers() {
-    const u = getUser();
-    return { 'Content-Type': 'application/json', ...(u && u.id ? { 'x-user-id': String(u.id) } : {}) };
+    return { 'Content-Type': 'application/json' };
   }
 
   function get(url) {

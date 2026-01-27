@@ -29,8 +29,7 @@
   }
 
   function headers() {
-    const u = getUser();
-    return { 'Content-Type': 'application/json', ...(u && u.id ? { 'x-user-id': String(u.id) } : {}) };
+    return { 'Content-Type': 'application/json' };
   }
 
   function get(url) {
@@ -520,7 +519,8 @@
       if (r.error) {
         showMessage(r.error, 'error');
       } else {
-        showMessage(eventId ? 'Event updated successfully' : 'Event created successfully', 'success');
+        const msg = r.message || (eventId ? 'Event updated successfully' : 'Event created successfully');
+        showMessage(msg, 'success');
         resetEventForm();
         loadMyEvents();
         loadEventsStats();
@@ -571,7 +571,8 @@
       if (r.error) {
         showMessage(r.error, 'error');
       } else {
-        showMessage('Event published successfully', 'success');
+        const msg = r.message || (r.status === 'pending_approval' ? 'Event submitted for approval' : 'Event published successfully');
+        showMessage(msg, 'success');
         resetEventForm();
         loadMyEvents();
         loadEventsStats();

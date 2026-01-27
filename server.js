@@ -8,6 +8,7 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const publicDir = path.join(__dirname, 'public');
 
 // MySQL config - set DB_HOST, DB_USER, DB_PASSWORD, DB_NAME in env or use defaults
 const dbConfig = {
@@ -80,7 +81,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
-app.use(express.static(__dirname));
+app.use(express.static(publicDir));
 
 // Session configuration
 app.use(session({
@@ -155,10 +156,30 @@ function getClientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'unknown';
 }
 
-// Helper: get user id from session (backward compatibility with header for existing code)
-const getUserId = (req) => {
-  return req.session.userId || (req.headers['x-user-id'] ? parseInt(req.headers['x-user-id'], 10) : null);
-};
+// Helper: get user id from session
+const getUserId = (req) => req.session.userId || null;
+
+// Helper: parse local date/time strings like YYYY-MM-DDTHH:mm or YYYY-MM-DD HH:mm:ss
+function parseLocalDateTime(value) {
+  if (value instanceof Date) {
+    return isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (match) {
+    const [, y, mo, d, h, mi, s] = match;
+    return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s || 0), 0);
+  }
+  const parsed = new Date(trimmed);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function toMySqlDateTimeLocal(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
 
 // Maintenance mode: block non-admin write operations
 app.use(async (req, res, next) => {
@@ -259,7 +280,7 @@ app.post('/logout', (req, res) => {
 
 // ==================== USER PROFILE ====================
 
-app.get('/api/profile', async (req, res) => {
+app.get('/api/profile', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   try {
@@ -273,7 +294,7 @@ app.get('/api/profile', async (req, res) => {
   }
 });
 
-app.put('/api/profile', async (req, res) => {
+app.put('/api/profile', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   const { full_name, department, academic_year, phone, bio, profile_visibility } = req.body;
@@ -299,7 +320,7 @@ app.put('/api/profile', async (req, res) => {
 
 // ==================== CLUBS: user's memberships & heads ====================
 
-app.get('/api/profile/clubs', async (req, res) => {
+app.get('/api/profile/clubs', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   try {
@@ -330,7 +351,7 @@ app.get('/api/clubs', async (req, res) => {
   }
 });
 
-app.post('/api/clubs/join', async (req, res) => {
+app.post('/api/clubs/join', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   const { clubId } = req.body;
@@ -378,7 +399,7 @@ app.get('/api/events', async (req, res) => {
   }
 });
 
-app.get('/api/events/registered', async (req, res) => {
+app.get('/api/events/registered', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   try {
@@ -429,7 +450,7 @@ app.get('/api/events/my-events', requireOrganizer, async (req, res) => {
   }
 });
 
-app.post('/api/events/register', async (req, res) => {
+app.post('/api/events/register', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   const { eventId } = req.body;
@@ -439,16 +460,37 @@ app.post('/api/events/register', async (req, res) => {
     if (registrationsFrozen) {
       return res.status(403).json({ success: false, message: 'Event registrations are currently frozen' });
     }
-    const [events] = await pool.query('SELECT status, registration_deadline FROM events WHERE id = ?', [eventId]);
+    const [events] = await pool.query('SELECT status, registration_deadline, max_participants FROM events WHERE id = ?', [eventId]);
     if (!events.length) return res.status(404).json({ success: false, message: 'Event not found' });
     if (events[0].status !== 'published') {
       return res.status(403).json({ success: false, message: 'Registrations are closed for this event' });
     }
+    const [existing] = await pool.query('SELECT status FROM event_registrations WHERE event_id = ? AND user_id = ?', [eventId, uid]);
+    if (existing.length && existing[0].status !== 'cancelled') {
+      return res.json({ success: true, message: 'Already registered' });
+    }
     if (events[0].registration_deadline) {
-      const deadline = new Date(events[0].registration_deadline);
-      if (!isNaN(deadline.getTime()) && deadline.getTime() < Date.now()) {
+      const deadline = parseLocalDateTime(events[0].registration_deadline);
+      if (deadline && deadline.getTime() < Date.now()) {
         return res.status(403).json({ success: false, message: 'Registration deadline has passed' });
       }
+    }
+    const maxParticipants = parseInt(events[0].max_participants, 10);
+    if (!isNaN(maxParticipants) && maxParticipants > 0) {
+      const [countRows] = await pool.query(
+        'SELECT COUNT(*) as c FROM event_registrations WHERE event_id = ? AND status != ?',
+        [eventId, 'cancelled']
+      );
+      if (countRows[0].c >= maxParticipants) {
+        return res.status(409).json({ success: false, message: 'Event is full' });
+      }
+    }
+    if (existing.length && existing[0].status === 'cancelled') {
+      await pool.query(
+        'UPDATE event_registrations SET status = ?, registered_at = NOW() WHERE event_id = ? AND user_id = ?',
+        ['registered', eventId, uid]
+      );
+      return res.json({ success: true, message: 'Registration restored' });
     }
     await pool.query('INSERT IGNORE INTO event_registrations (event_id, user_id) VALUES (?, ?)', [eventId, uid]);
     res.json({ success: true, message: 'Registered for event' });
@@ -479,7 +521,7 @@ app.get('/api/organizer/events', requireOrganizer, async (req, res) => {
 
 // POST /api/events - Create event (organizer only)
 app.post('/api/events', requireOrganizer, async (req, res) => {
-  const { title, description, event_date, start_time, end_time, location, online_link, max_participants, registration_deadline } = req.body;
+  const { title, description, event_date, start_time, end_time, location, online_link, max_participants, registration_deadline, status } = req.body;
   
   // Ensure session has userId
   if (!req.session.userId) {
@@ -503,26 +545,35 @@ app.post('/api/events', requireOrganizer, async (req, res) => {
   if (isNaN(maxParts) || maxParts < 0) {
     return res.status(400).json({ error: 'max_participants must be an integer >= 0' });
   }
+
+  const allowedCreateStatuses = ['draft', 'published'];
+  const requestedStatus = status ? String(status) : 'draft';
+  if (!allowedCreateStatuses.includes(requestedStatus)) {
+    return res.status(400).json({ error: 'Invalid status for new event' });
+  }
   
   // Validate and format registration_deadline
   let formattedDeadline = null;
   if (registration_deadline) {
-    const deadline = new Date(registration_deadline);
-    if (isNaN(deadline.getTime())) {
+    const deadline = parseLocalDateTime(registration_deadline);
+    if (!deadline) {
       return res.status(400).json({ error: 'Invalid registration deadline format' });
     }
-    const eventStart = new Date(`${event_date}T${start_time}`);
-    if (deadline >= eventStart) {
+    const eventStart = parseLocalDateTime(`${event_date}T${start_time}`);
+    if (eventStart && deadline >= eventStart) {
       return res.status(400).json({ error: 'registration_deadline must be before event start' });
     }
     // Format as MySQL DATETIME: YYYY-MM-DD HH:MM:SS
-    formattedDeadline = deadline.toISOString().slice(0, 19).replace('T', ' ');
+    formattedDeadline = toMySqlDateTimeLocal(deadline);
   }
   
   try {
     // Check if approval workflow is enabled
     const approvalRequired = await getSetting('event_approval_required');
-    const initialStatus = approvalRequired ? 'pending_approval' : 'draft';
+    let initialStatus = requestedStatus;
+    if (approvalRequired && requestedStatus === 'published') {
+      initialStatus = 'pending_approval';
+    }
 
     const maxEvents = await getSetting('max_events_per_organizer');
     if (Number.isFinite(maxEvents) && maxEvents > 0) {
@@ -539,8 +590,11 @@ app.post('/api/events', requireOrganizer, async (req, res) => {
       [title, description, event_date, start_time, end_time, location || null, online_link || null, 
        maxParts, formattedDeadline, req.session.userId, initialStatus]
     );
-    res.json({ 
-      message: approvalRequired ? 'Event created and submitted for approval' : 'Event created successfully', 
+    let message = 'Event created successfully';
+    if (initialStatus === 'pending_approval') message = 'Event created and submitted for approval';
+    if (initialStatus === 'draft') message = 'Event saved as draft';
+    res.json({
+      message,
       eventId: r.insertId,
       status: initialStatus
     });
@@ -591,18 +645,18 @@ app.put('/api/events/:id', requireOrganizer, async (req, res) => {
     let formattedDeadline = undefined;
     if (registration_deadline !== undefined) {
       if (registration_deadline) {
-        const deadline = new Date(registration_deadline);
-        if (isNaN(deadline.getTime())) {
+        const deadline = parseLocalDateTime(registration_deadline);
+        if (!deadline) {
           return res.status(400).json({ error: 'Invalid registration deadline format' });
         }
         if (event_date && start_time) {
-          const eventStart = new Date(`${event_date}T${start_time}`);
-          if (deadline >= eventStart) {
+          const eventStart = parseLocalDateTime(`${event_date}T${start_time}`);
+          if (eventStart && deadline >= eventStart) {
             return res.status(400).json({ error: 'registration_deadline must be before event start' });
           }
         }
         // Format as MySQL DATETIME: YYYY-MM-DD HH:MM:SS
-        formattedDeadline = deadline.toISOString().slice(0, 19).replace('T', ' ');
+        formattedDeadline = toMySqlDateTimeLocal(deadline);
       } else {
         formattedDeadline = null;
       }
@@ -727,7 +781,7 @@ app.post('/api/events/:id/close', requireOrganizer, async (req, res) => {
   }
 });
 
-app.get('/api/events/:id/registrations', async (req, res) => {
+app.get('/api/events/:id/registrations', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   const eventId = parseInt(req.params.id, 10);
@@ -750,7 +804,7 @@ app.get('/api/events/:id/registrations', async (req, res) => {
   }
 });
 
-app.post('/api/events/:id/notify', async (req, res) => {
+app.post('/api/events/:id/notify', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   const eventId = parseInt(req.params.id, 10);
@@ -783,7 +837,7 @@ app.get('/api/resources', async (req, res) => {
   }
 });
 
-app.get('/api/resources/bookings', async (req, res) => {
+app.get('/api/resources/bookings', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   try {
@@ -802,16 +856,35 @@ app.get('/api/resources/bookings', async (req, res) => {
   }
 });
 
-app.post('/api/resources/book', async (req, res) => {
+app.post('/api/resources/book', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   const { resourceId, start_datetime, end_datetime, purpose } = req.body;
   if (!resourceId || !start_datetime || !end_datetime) {
     return res.status(400).json({ success: false, message: 'resourceId, start_datetime, end_datetime required' });
   }
+  const start = parseLocalDateTime(start_datetime);
+  const end = parseLocalDateTime(end_datetime);
+  if (!start || !end) {
+    return res.status(400).json({ success: false, message: 'Invalid start/end datetime format' });
+  }
+  if (end <= start) {
+    return res.status(400).json({ success: false, message: 'end_datetime must be after start_datetime' });
+  }
   try {
     const [r] = await pool.query('SELECT requires_approval FROM resources WHERE id = ?', [resourceId]);
     if (!r.length) return res.status(404).json({ success: false, message: 'Resource not found' });
+    const [overlap] = await pool.query(
+      `SELECT COUNT(*) as c
+       FROM resource_bookings
+       WHERE resource_id = ?
+         AND status IN ('pending', 'approved')
+         AND NOT (end_datetime <= ? OR start_datetime >= ?)`,
+      [resourceId, start_datetime, end_datetime]
+    );
+    if (overlap[0].c > 0) {
+      return res.status(409).json({ success: false, message: 'Resource is already booked for that time' });
+    }
     const status = r[0].requires_approval ? 'pending' : 'approved';
     const [ins] = await pool.query(
       'INSERT INTO resource_bookings (resource_id, user_id, start_datetime, end_datetime, status, purpose) VALUES (?, ?, ?, ?, ?, ?)',
@@ -825,7 +898,7 @@ app.post('/api/resources/book', async (req, res) => {
 
 // ==================== NOTIFICATIONS ====================
 
-app.get('/api/notifications', async (req, res) => {
+app.get('/api/notifications', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   try {
@@ -839,7 +912,7 @@ app.get('/api/notifications', async (req, res) => {
   }
 });
 
-app.patch('/api/notifications/:id/read', async (req, res) => {
+app.patch('/api/notifications/:id/read', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false });
   try {
@@ -852,7 +925,7 @@ app.patch('/api/notifications/:id/read', async (req, res) => {
 
 // ==================== MESSAGES (thread list for sidebar) ====================
 
-app.get('/api/messages/threads', async (req, res) => {
+app.get('/api/messages/threads', requireAuth, async (req, res) => {
   const uid = getUserId(req);
   if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
   try {
@@ -1287,18 +1360,18 @@ app.post('/api/admin/emergency/freeze-registrations', requireAdmin, async (req, 
 
 // ==================== ROUTES & STATIC ====================
 
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'login.html')));
+app.get('/', (req, res) => res.sendFile(path.join(publicDir, 'login.html')));
 app.get('/student-home', (req, res) => {
   if (!req.session.userId) return res.redirect('/');
   if (req.session.role === 'organizer') return res.redirect('/organizer-home');
   if (req.session.role === 'admin') return res.redirect('/admin-home');
-  return res.sendFile(path.join(__dirname, 'student-home.html'));
+  return res.sendFile(path.join(publicDir, 'student-home.html'));
 });
 app.get('/organizer-home', (req, res) => {
   if (!req.session.userId) return res.redirect('/');
   if (req.session.role === 'participant') return res.redirect('/student-home');
   if (req.session.role === 'admin' || req.session.role === 'organizer') {
-    return res.sendFile(path.join(__dirname, 'organizer-home.html'));
+    return res.sendFile(path.join(publicDir, 'organizer-home.html'));
   }
   return res.redirect('/');
 });
@@ -1308,7 +1381,7 @@ app.get('/admin-home', (req, res) => {
     if (req.session.role === 'organizer') return res.redirect('/organizer-home');
     return res.redirect('/student-home');
   }
-  return res.sendFile(path.join(__dirname, 'admin-home.html'));
+  return res.sendFile(path.join(publicDir, 'admin-home.html'));
 });
 
 // ==================== SERVER ====================
