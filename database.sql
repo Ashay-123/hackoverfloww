@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(255) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
     role ENUM('admin', 'organizer', 'participant') NOT NULL DEFAULT 'participant',
+    is_active TINYINT(1) DEFAULT 1,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
@@ -80,7 +82,8 @@ CREATE TABLE IF NOT EXISTS events (
     online_link VARCHAR(255) NULL,
     max_participants INT DEFAULT 0 NOT NULL,
     registration_deadline DATETIME NULL,
-    status ENUM('draft', 'published', 'closed') DEFAULT 'draft' NOT NULL,
+    status ENUM('draft', 'pending_approval', 'published', 'rejected', 'closed') DEFAULT 'draft' NOT NULL,
+    rejection_reason TEXT NULL,
     created_by INT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -206,6 +209,46 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX idx_messages_thread ON messages(thread_id);
+
+-- ==================== ADMIN AUDIT LOGS ====================
+CREATE TABLE IF NOT EXISTS admin_logs (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    admin_id INT NOT NULL,
+    admin_email VARCHAR(255) NOT NULL,
+    action VARCHAR(100) NOT NULL,
+    target_type ENUM('user', 'event', 'setting', 'system') NOT NULL,
+    target_id INT NULL,
+    details JSON,
+    ip_address VARCHAR(45),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_admin_logs_admin ON admin_logs(admin_id);
+CREATE INDEX idx_admin_logs_action ON admin_logs(action);
+CREATE INDEX idx_admin_logs_created ON admin_logs(created_at);
+
+-- ==================== SYSTEM SETTINGS ====================
+CREATE TABLE IF NOT EXISTS system_settings (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    setting_key VARCHAR(100) UNIQUE NOT NULL,
+    setting_value TEXT NOT NULL,
+    setting_type ENUM('boolean', 'number', 'string') DEFAULT 'string',
+    description VARCHAR(500),
+    updated_by INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- Default system settings
+INSERT INTO system_settings (setting_key, setting_value, setting_type, description) VALUES
+('event_approval_required', 'false', 'boolean', 'Require admin approval for new events'),
+('allow_new_registrations', 'true', 'boolean', 'Allow new user registrations'),
+('max_events_per_organizer', '50', 'number', 'Maximum events an organizer can create'),
+('maintenance_mode', 'false', 'boolean', 'Enable read-only maintenance mode'),
+('registrations_frozen', 'false', 'boolean', 'Temporarily freeze all event registrations')
+ON DUPLICATE KEY UPDATE setting_key = setting_key;
 
 -- ==================== SEED DATA ====================
 -- Default users: run app once to bcrypt-hash; or use: node -e "require('bcrypt').hash('password123',10).then(h=>console.log(h))"

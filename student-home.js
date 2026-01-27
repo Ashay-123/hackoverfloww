@@ -19,25 +19,57 @@
     window.location.href = '/';
   }
 
+  function redirectByRole(u) {
+    if (!u || !u.role) return redirectLogin();
+    if (u.role === 'admin') return (window.location.href = '/admin-home');
+    if (u.role === 'organizer') return (window.location.href = '/organizer-home');
+    if (u.role === 'participant') return;
+    return redirectLogin();
+  }
+
   function headers() {
     const u = getUser();
     return { 'Content-Type': 'application/json', ...(u && u.id ? { 'x-user-id': String(u.id) } : {}) };
   }
 
   function get(url) {
-    return fetch(API + url, { headers: headers() }).then(r => r.json());
+    return fetch(API + url, { credentials: 'include', headers: headers() }).then(r => {
+      if (!r.ok && r.status === 401) {
+        redirectLogin();
+        throw new Error('Unauthorized');
+      }
+      return r.json();
+    });
   }
 
   function post(url, body) {
-    return fetch(API + url, { method: 'POST', headers: headers(), body: JSON.stringify(body) }).then(r => r.json());
+    return fetch(API + url, { method: 'POST', credentials: 'include', headers: headers(), body: JSON.stringify(body) }).then(r => {
+      if (!r.ok && r.status === 401) {
+        redirectLogin();
+        throw new Error('Unauthorized');
+      }
+      return r.json();
+    });
   }
 
   function put(url, body) {
-    return fetch(API + url, { method: 'PUT', headers: headers(), body: JSON.stringify(body) }).then(r => r.json());
+    return fetch(API + url, { method: 'PUT', credentials: 'include', headers: headers(), body: JSON.stringify(body) }).then(r => {
+      if (!r.ok && r.status === 401) {
+        redirectLogin();
+        throw new Error('Unauthorized');
+      }
+      return r.json();
+    });
   }
 
   function patch(url) {
-    return fetch(API + url, { method: 'PATCH', headers: headers() }).then(r => r.json());
+    return fetch(API + url, { method: 'PATCH', credentials: 'include', headers: headers() }).then(r => {
+      if (!r.ok && r.status === 401) {
+        redirectLogin();
+        throw new Error('Unauthorized');
+      }
+      return r.json();
+    });
   }
 
   // ---------- DOM ----------
@@ -85,7 +117,10 @@
     if (!e.target.closest('.user-menu')) document.querySelector('.user-menu')?.classList.remove('open');
   });
 
-  function logout() { redirectLogin(); }
+  async function logout() {
+    try { await post('/logout', {}); } catch (_) {}
+    redirectLogin();
+  }
   $('logoutBtn')?.addEventListener('click', logout);
   $('logoutBtn2')?.addEventListener('click', logout);
 
@@ -194,36 +229,175 @@
   function loadEvents() {
     const el = $('eventsList');
     if (!el) return;
+    el.innerHTML = '<p class="muted">Loading events...</p>';
+    
     get('/api/events').then(r => {
       const arr = r.events || [];
-      el.innerHTML = arr.length ? arr.map(e => {
-        const d = formatDate(e.event_date);
-        const reg = '<button type="button" class="btn btn-ghost" style="margin:0" data-event-id="' + e.id + '">Register</button>';
-        return '<div class="item-row"><div><h4>' + escapeHtml(e.title) + '</h4><p class="meta">' + d + (e.location ? ' • ' + escapeHtml(e.location) : '') + (e.club_name ? ' • ' + escapeHtml(e.club_name) : '') + '</p></div>' + reg + '</div>';
-      }).join('') : '<p class="muted">No approved events.</p>';
+      if (!arr.length) {
+        el.innerHTML = '<div class="card"><p class="muted" style="text-align:center; padding:2rem;">📅 No events available at the moment.<br>Check back soon for upcoming events!</p></div>';
+        return;
+      }
+      
+      el.innerHTML = arr.map(e => {
+        const date = formatDate(e.event_date);
+        const timeRange = e.start_time && e.end_time ? `${e.start_time.slice(0, 5)} - ${e.end_time.slice(0, 5)}` : '';
+        const locationType = e.online_link ? '🌐 Online' : '📍 In-person';
+        const locationText = e.online_link ? 'Online Event' : (e.location || 'TBD');
+        const maxParts = e.max_participants === 0 ? 'Unlimited' : e.max_participants + ' spots';
+        const status = e.status || 'published';
+        const deadlineText = e.registration_deadline ? '<div><strong>Registration Deadline:</strong> ' + formatDateTime(e.registration_deadline) + '</div>' : '';
+        const deadline = e.registration_deadline ? new Date(e.registration_deadline) : null;
+        const deadlinePassed = deadline && deadline.getTime() < Date.now();
+        const isClosed = status === 'closed';
+        const canRegister = !isClosed && !deadlinePassed;
+        const registerLabel = isClosed ? 'Event closed' : deadlinePassed ? 'Registration closed' : 'Register Now';
+        const registerButton = canRegister
+          ? `<button type="button" class="btn btn-primary btn-register" data-event-id="${e.id}">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+              ${registerLabel}
+            </button>`
+          : `<button type="button" class="btn btn-primary btn-register" disabled>${registerLabel}</button>`;
+        
+        return `<div class="event-card">
+          <div class="event-header">
+            <div>
+              <h3>${escapeHtml(e.title)}</h3>
+              ${e.club_name ? '<span class="event-club">' + escapeHtml(e.club_name) + '</span>' : ''}
+            </div>
+            <span class="event-badge ${status}">${status}</span>
+          </div>
+          <div class="event-body">
+            <p class="event-description">${escapeHtml(e.description || '')}</p>
+            <div class="event-details">
+              <div class="event-detail">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                <span><strong>Date:</strong> ${date}</span>
+              </div>
+              <div class="event-detail">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <span><strong>Time:</strong> ${timeRange}</span>
+              </div>
+              <div class="event-detail">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                <span><strong>${locationType}:</strong> ${escapeHtml(locationText)}</span>
+              </div>
+              <div class="event-detail">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                <span><strong>Capacity:</strong> ${maxParts}</span>
+              </div>
+              ${deadlineText}
+            </div>
+          </div>
+          <div class="event-footer">
+            ${registerButton}
+            ${e.online_link ? '<a href="' + escapeHtml(e.online_link) + '" target="_blank" class="btn btn-ghost">View Link</a>' : ''}
+          </div>
+        </div>`;
+      }).join('');
+      
       el.querySelectorAll('[data-event-id]').forEach(btn => {
         btn.addEventListener('click', function () { registerEvent(parseInt(this.dataset.eventId, 10)); });
       });
-    }).catch(() => { el.innerHTML = '<p class="muted">Could not load events.</p>'; });
+    }).catch(() => { 
+      el.innerHTML = '<div class="card"><p class="muted" style="text-align:center; padding:2rem;">❌ Could not load events.<br>Please refresh the page.</p></div>'; 
+    });
   }
 
   function loadRegistered() {
     const el = $('registeredList');
     if (!el) return;
+    el.innerHTML = '<p class="muted">Loading your registrations...</p>';
+    
     get('/api/events/registered').then(r => {
       const arr = r.events || [];
-      el.innerHTML = arr.length ? arr.map(e => {
-        const d = formatDate(e.event_date);
-        return '<div class="item-row"><div><h4>' + escapeHtml(e.title) + '</h4><p class="meta">' + d + (e.location ? ' • ' + escapeHtml(e.location) : '') + (e.club_name ? ' • ' + escapeHtml(e.club_name) : '') + '</p><span class="status ' + (e.reg_status || 'registered') + '">' + (e.reg_status || 'registered') + '</span></div></div>';
-      }).join('') : '<p class="muted">No registered events.</p>';
-    }).catch(() => { el.innerHTML = '<p class="muted">Could not load.</p>'; });
+      if (!arr.length) {
+        el.innerHTML = '<div class="card"><p class="muted" style="text-align:center; padding:2rem;">📋 You haven\'t registered for any events yet.<br><a href="#events">Explore events</a> to get started!</p></div>';
+        return;
+      }
+      
+      el.innerHTML = arr.map(e => {
+        const date = formatDate(e.event_date);
+        const timeRange = e.start_time && e.end_time ? `${e.start_time.slice(0, 5)} - ${e.end_time.slice(0, 5)}` : '';
+        const locationType = e.online_link ? '🌐 Online' : '📍';
+        const locationText = e.location || 'Online Event';
+        const regStatus = e.reg_status || 'registered';
+        const statusColors = { registered: 'success', cancelled: 'danger', attended: 'info' };
+        
+        return `<div class="registered-event-card">
+          <div class="event-status-indicator ${statusColors[regStatus] || 'success'}"></div>
+          <div class="event-content">
+            <div class="event-main">
+              <h4>${escapeHtml(e.title)}</h4>
+              ${e.club_name ? '<span class="event-club-small">' + escapeHtml(e.club_name) + '</span>' : ''}
+              <div class="event-info">
+                <span>📅 ${date}</span>
+                <span>🕒 ${timeRange}</span>
+                <span>${locationType} ${escapeHtml(locationText)}</span>
+              </div>
+            </div>
+            <span class="status ${regStatus}">${regStatus}</span>
+          </div>
+        </div>`;
+      }).join('');
+    }).catch(() => { 
+      el.innerHTML = '<div class="card"><p class="muted" style="text-align:center; padding:2rem;">❌ Could not load your registrations.<br>Please refresh the page.</p></div>'; 
+    });
   }
 
   function registerEvent(id) {
+    const btn = document.querySelector(`[data-event-id="${id}"]`);
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg> Registering...';
+      btn.style.opacity = '0.6';
+    }
+    
     post('/api/events/register', { eventId: id }).then(r => {
-      if (r.success) { loadEvents(); loadRegistered(); loadUpcoming(); alert('Registered.'); }
-      else alert(r.message || 'Failed.');
-    }).catch(() => alert('Request failed.'));
+      if (r.success) { 
+        if (btn) {
+          btn.innerHTML = '✓ Registered!';
+          btn.classList.remove('btn-primary');
+          btn.classList.add('btn-success');
+        }
+        setTimeout(() => {
+          loadEvents();
+          loadRegistered();
+          loadUpcoming();
+          showNotification('Successfully registered for the event!', 'success');
+        }, 1000);
+      } else {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg> Register Now';
+          btn.style.opacity = '1';
+        }
+        showNotification(r.message || 'Failed to register', 'error');
+      }
+    }).catch(() => {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg> Register Now';
+        btn.style.opacity = '1';
+      }
+      showNotification('Request failed. Please try again.', 'error');
+    });
+  }
+  
+  function showNotification(message, type = 'success') {
+    const notification = document.createElement('div');
+    notification.className = `toast-notification ${type}`;
+    notification.innerHTML = `
+      <div class="toast-content">
+        ${type === 'success' ? '✓' : '❌'} ${message}
+      </div>
+    `;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => notification.classList.add('show'), 10);
+    setTimeout(() => {
+      notification.classList.remove('show');
+      setTimeout(() => notification.remove(), 300);
+    }, 3000);
   }
 
   function loadUpcoming() {
@@ -391,7 +565,7 @@
 
   function formatDate(s) {
     if (!s) return '—';
-    try { return new Date(s + 'Z').toLocaleDateString(undefined, { dateStyle: 'medium' }); } catch (_) { return s; }
+    try { return new Date(s + 'T00:00:00').toLocaleDateString(undefined, { dateStyle: 'medium' }); } catch (_) { return s; }
   }
 
   function formatDateTime(s) {
@@ -407,6 +581,7 @@
   function init() {
     const u = getUser();
     if (!u || !u.id) { redirectLogin(); return; }
+    if (u.role !== 'participant') { redirectByRole(u); return; }
     loadProfile();
     loadProfileClubs();
     loadMyClubsDashboard();

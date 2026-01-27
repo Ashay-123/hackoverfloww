@@ -227,7 +227,16 @@ body {
 .section {
   display: none;
 }
-.section.active { display: block; }
+.section.active { display: block; animation: sectionFade 0.35s ease; }
+
+@keyframes sectionFade {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .section.active { animation: none; }
+}
 
 .section-title { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 4px; }
 .section-desc { color: var(--text-muted); font-size: 0.95rem; margin-bottom: 24px; }
@@ -241,6 +250,11 @@ body {
   padding: 20px;
   flex: 1;
   min-width: 260px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 30px rgba(0,0,0,0.35);
 }
 .card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 12px; color: var(--text); }
 .card h4 { font-size: 0.9rem; font-weight: 600; margin: 12px 0 6px; color: var(--text-muted); }
@@ -280,10 +294,11 @@ body {
 .card-list .card { min-width: 0; }
 .card-list .meta { font-size: 0.8rem; color: var(--text-muted); margin-top: 6px; }
 .card-list .status { font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; display: inline-block; }
-.status.approved, .status.registered { background: rgba(74,222,128,0.2); color: var(--success); }
+.status.approved, .status.registered, .status.published { background: rgba(74,222,128,0.2); color: var(--success); }
 .status.pending, .status.pending_approval { background: rgba(251,191,36,0.2); color: var(--warn); }
 .status.rejected, .status.cancelled { background: rgba(248,113,113,0.2); color: var(--error); }
-.status.completed { background: rgba(124,156,255,0.2); color: var(--accent); }
+.status.completed, .status.attended { background: rgba(124,156,255,0.2); color: var(--accent); }
+.status.closed { background: rgba(139,146,163,0.2); color: var(--text-muted); }
 .status.draft { background: rgba(139,146,163,0.2); color: var(--text-muted); }
 
 /* ===== Stats ===== */
@@ -330,6 +345,11 @@ body {
   border: none;
   transition: background 0.2s, color 0.2s;
   margin-top: 8px;
+}
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  filter: none;
 }
 .btn-primary { background: linear-gradient(135deg, var(--accent), #9f7aea); color: #0d0f14; }
 .btn-primary:hover { filter: brightness(1.1); }

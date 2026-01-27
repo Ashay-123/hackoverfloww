@@ -20,6 +20,14 @@
     window.location.href = '/';
   }
 
+  function redirectByRole(u) {
+    if (!u || !u.role) return redirectLogin();
+    if (u.role === 'admin') return (window.location.href = '/admin-home');
+    if (u.role === 'participant') return (window.location.href = '/student-home');
+    if (u.role === 'organizer') return;
+    return redirectLogin();
+  }
+
   function headers() {
     const u = getUser();
     return { 'Content-Type': 'application/json', ...(u && u.id ? { 'x-user-id': String(u.id) } : {}) };
@@ -83,7 +91,13 @@
   }
 
   function patch(url) {
-    return fetch(API + url, { method: 'PATCH', headers: headers() }).then(r => r.json());
+    return fetch(API + url, { method: 'PATCH', credentials: 'include', headers: headers() }).then(r => {
+      if (!r.ok && r.status === 401) {
+        redirectLogin();
+        throw new Error('Unauthorized');
+      }
+      return r.json();
+    });
   }
 
   // ---------- DOM ----------
@@ -131,7 +145,10 @@
     if (!e.target.closest('.user-menu')) document.querySelector('.user-menu')?.classList.remove('open');
   });
 
-  function logout() { redirectLogin(); }
+  async function logout() {
+    try { await post('/logout', {}); } catch (_) {}
+    redirectLogin();
+  }
   $('logoutBtn')?.addEventListener('click', logout);
   $('logoutBtn2')?.addEventListener('click', logout);
 
@@ -272,12 +289,14 @@
       const status = e.status || 'draft';
       
       const actions = [];
-      if (status === 'draft') {
+      if (status === 'draft' || status === 'rejected') {
         actions.push(`<button type="button" class="btn btn-sm btn-ghost" data-edit="${e.id}">Edit</button>`);
         actions.push(`<button type="button" class="btn btn-sm btn-danger" data-delete="${e.id}">Delete</button>`);
-      }
-      if (status === 'draft') {
         actions.push(`<button type="button" class="btn btn-sm btn-primary" data-publish="${e.id}">Publish</button>`);
+      }
+      if (status === 'pending_approval') {
+        actions.push(`<button type="button" class="btn btn-sm btn-ghost" data-edit="${e.id}">Edit</button>`);
+        actions.push(`<button type="button" class="btn btn-sm btn-danger" data-delete="${e.id}">Delete</button>`);
       }
       if (status === 'published') {
         actions.push(`<button type="button" class="btn btn-sm btn-secondary" data-close="${e.id}">Close</button>`);
@@ -327,14 +346,15 @@
   function loadEventsStats() {
     get('/api/organizer/events').then(events => {
       const arr = Array.isArray(events) ? events : [];
-      const stats = { draft: 0, published: 0, closed: 0 };
+      const stats = { draft: 0, pending_approval: 0, published: 0, closed: 0, rejected: 0 };
       arr.forEach(e => {
         const s = e.status || 'draft';
         if (stats[s] !== undefined) stats[s]++;
       });
       if ($('statDraft')) $('statDraft').textContent = stats.draft;
-      if ($('statPending')) $('statPending').textContent = stats.published;
-      if ($('statApproved')) $('statApproved').textContent = stats.closed;
+      if ($('statPending')) $('statPending').textContent = stats.pending_approval;
+      if ($('statApproved')) $('statApproved').textContent = stats.published;
+      if ($('statCompleted')) $('statCompleted').textContent = stats.closed + stats.rejected;
     });
   }
 
@@ -589,7 +609,7 @@
     $('eStartTime').value = event.start_time || '';
     $('eEndTime').value = event.end_time || '';
     $('eMaxParticipants').value = event.max_participants || 0;
-    $('eRegDeadline').value = event.registration_deadline ? event.registration_deadline.slice(0, 16) : '';
+    $('eRegDeadline').value = toDateTimeLocalValue(event.registration_deadline);
     
     if (event.location) {
       currentMode = 'inperson';
@@ -878,9 +898,19 @@
     return d.innerHTML;
   }
 
+  function toDateTimeLocalValue(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (isNaN(d.getTime())) {
+      return String(value).replace(' ', 'T').slice(0, 16);
+    }
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
   function formatDate(s) {
     if (!s) return '—';
-    try { return new Date(s + 'Z').toLocaleDateString(undefined, { dateStyle: 'medium' }); } catch (_) { return s; }
+    try { return new Date(s + 'T00:00:00').toLocaleDateString(undefined, { dateStyle: 'medium' }); } catch (_) { return s; }
   }
 
   function formatDateTime(s) {
@@ -896,6 +926,7 @@
   function init() {
     const u = getUser();
     if (!u || !u.id) { redirectLogin(); return; }
+    if (u.role !== 'organizer' && u.role !== 'admin') { redirectByRole(u); return; }
     loadProfile();
     loadProfileClubs();
     loadMyClubsDashboard();
@@ -905,8 +936,6 @@
     loadNotifications();
     updateNotifBadge();
     loadMessageThreads();
-    loadMyEvents();
-    loadEventsStats();
     loadResources();
     loadBookings();
     loadResourceOptions();

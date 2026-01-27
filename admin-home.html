@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Control Panel - Campus Hub</title>
+  <link rel="stylesheet" href="admin-home.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app">
+    <!-- Top bar -->
+    <header class="topbar">
+      <button class="menu-btn" id="menuBtn" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+      <a href="#" class="brand">Campus Hub Admin</a>
+      <div class="topbar-actions">
+        <div class="user-menu">
+          <button class="user-btn" id="userMenuBtn">
+            <span class="avatar" id="userAvatar">A</span>
+            <span class="name" id="userName">Admin</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div class="user-dropdown" id="userDropdown">
+            <a href="#settings">Settings</a>
+            <hr>
+            <button type="button" id="logoutBtn">Log out</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <nav class="nav">
+        <a href="#dashboard" class="nav-item active">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          Dashboard
+        </a>
+        <a href="#users" class="nav-item">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          User Management
+        </a>
+        <a href="#events" class="nav-item">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          Event Oversight
+        </a>
+        <a href="#settings" class="nav-item">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          System Settings
+        </a>
+        <a href="#logs" class="nav-item">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          Audit Logs
+        </a>
+      </nav>
+    </aside>
+
+    <!-- Overlay for mobile -->
+    <div class="overlay" id="overlay"></div>
+
+    <!-- Main content -->
+    <main class="main">
+      <!-- Dashboard -->
+      <section id="dashboard" class="section active">
+        <h1 class="section-title">Admin Dashboard</h1>
+        <p class="section-desc">System overview and key metrics</p>
+
+        <div id="message" class="message" style="display: none;"></div>
+
+        <!-- Stats -->
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon admin">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </div>
+            <div class="stat-content">
+              <div class="stat-label">Total Users</div>
+              <div class="stat-value" id="statTotalUsers">0</div>
+              <div class="stat-sub" id="statUsersByRole">—</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon event">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            </div>
+            <div class="stat-content">
+              <div class="stat-label">Total Events</div>
+              <div class="stat-value" id="statTotalEvents">0</div>
+              <div class="stat-sub" id="statEventsByStatus">—</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon pending">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </div>
+            <div class="stat-content">
+              <div class="stat-label">Pending Approval</div>
+              <div class="stat-value" id="statPendingApproval">0</div>
+              <div class="stat-sub">Events awaiting review</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon upcoming">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <div class="stat-content">
+              <div class="stat-label">Upcoming Events</div>
+              <div class="stat-value" id="statUpcomingEvents">0</div>
+              <div class="stat-sub">Next 7 days</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="grid-2">
+          <div class="card">
+            <h3>Recent Users</h3>
+            <div id="recentUsers" class="list-compact">Loading…</div>
+          </div>
+          <div class="card">
+            <h3>Recent Events</h3>
+            <div id="recentEvents" class="list-compact">Loading…</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Top Organizers</h3>
+          <div id="topOrganizers" class="list-compact">Loading…</div>
+        </div>
+
+        <!-- Emergency Controls -->
+        <div class="card danger-zone">
+          <h3>⚠️ Emergency Controls</h3>
+          <p class="muted">Use these controls only in critical situations. All actions are logged.</p>
+          <div class="emergency-actions">
+            <button type="button" id="btnForceLogout" class="btn btn-danger">Force Logout All Users</button>
+            <button type="button" id="btnDisableEvents" class="btn btn-danger">Close All Events</button>
+            <button type="button" id="btnFreezeReg" class="btn btn-danger">Freeze Registrations</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- User Management -->
+      <section id="users" class="section">
+        <h1 class="section-title">User Management</h1>
+        <p class="section-desc">Manage users, roles, and account status</p>
+
+        <div id="userMessage" class="message" style="display: none;"></div>
+
+        <!-- Filters -->
+        <div class="filters">
+          <input type="text" id="userSearch" placeholder="Search by email or name..." class="filter-input">
+          <select id="roleFilter" class="filter-select">
+            <option value="">All Roles</option>
+            <option value="admin">Admin</option>
+            <option value="organizer">Organizer</option>
+            <option value="participant">Participant</option>
+          </select>
+          <select id="statusFilter" class="filter-select">
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="disabled">Disabled</option>
+          </select>
+          <button type="button" id="refreshUsers" class="btn btn-ghost">Refresh</button>
+        </div>
+
+        <!-- Users Table -->
+        <div class="table-container">
+          <table class="data-table" id="usersTable">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Name</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="usersTableBody">
+              <tr><td colspan="6" class="loading">Loading users...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Event Oversight -->
+      <section id="events" class="section">
+        <h1 class="section-title">Event Oversight</h1>
+        <p class="section-desc">Review, approve, and moderate all events</p>
+
+        <div id="eventMessage" class="message" style="display: none;"></div>
+
+        <!-- Filters -->
+        <div class="filters">
+          <input type="text" id="eventSearch" placeholder="Search events..." class="filter-input">
+          <select id="eventStatusFilter" class="filter-select">
+            <option value="">All Status</option>
+            <option value="pending_approval">Pending Approval</option>
+            <option value="published">Published</option>
+            <option value="draft">Draft</option>
+            <option value="rejected">Rejected</option>
+            <option value="closed">Closed</option>
+          </select>
+          <button type="button" id="refreshEvents" class="btn btn-ghost">Refresh</button>
+        </div>
+
+        <!-- Events List -->
+        <div id="eventsList" class="card-list">Loading…</div>
+      </section>
+
+      <!-- System Settings -->
+      <section id="settings" class="section">
+        <h1 class="section-title">System Settings</h1>
+        <p class="section-desc">Configure global system behavior</p>
+
+        <div id="settingsMessage" class="message" style="display: none;"></div>
+
+        <div class="card">
+          <h3>Event Management</h3>
+          <div class="setting-item">
+            <label class="switch">
+              <input type="checkbox" id="settingApproval">
+              <span class="slider"></span>
+            </label>
+            <div class="setting-info">
+              <strong>Event Approval Required</strong>
+              <p class="muted">New events must be approved before publication</p>
+            </div>
+          </div>
+          <div class="setting-item">
+            <label class="switch">
+              <input type="checkbox" id="settingRegistrations">
+              <span class="slider"></span>
+            </label>
+            <div class="setting-info">
+              <strong>Allow New Registrations</strong>
+              <p class="muted">Enable/disable new user account creation</p>
+            </div>
+          </div>
+          <div class="setting-item">
+            <label class="switch">
+              <input type="checkbox" id="settingMaintenance">
+              <span class="slider"></span>
+            </label>
+            <div class="setting-info">
+              <strong>Maintenance Mode</strong>
+              <p class="muted">Enable read-only mode across the system</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Limits</h3>
+          <div class="field">
+            <label>Max Events per Organizer</label>
+            <input type="number" id="settingMaxEvents" min="1" max="500" class="setting-input">
+            <span class="field-hint">Maximum number of events an organizer can create</span>
+          </div>
+        </div>
+
+        <button type="button" id="saveSettings" class="btn btn-primary">Save Settings</button>
+      </section>
+
+      <!-- Audit Logs -->
+      <section id="logs" class="section">
+        <h1 class="section-title">Audit Logs</h1>
+        <p class="section-desc">Track all admin actions and system changes</p>
+
+        <!-- Filters -->
+        <div class="filters">
+          <select id="logActionFilter" class="filter-select">
+            <option value="">All Actions</option>
+            <option value="role_change">Role Changes</option>
+            <option value="approve_event">Event Approvals</option>
+            <option value="reject_event">Event Rejections</option>
+            <option value="disable_user">User Disable</option>
+            <option value="enable_user">User Enable</option>
+            <option value="update_settings">Settings Updates</option>
+          </select>
+          <select id="logTargetFilter" class="filter-select">
+            <option value="">All Targets</option>
+            <option value="user">User</option>
+            <option value="event">Event</option>
+            <option value="setting">Setting</option>
+            <option value="system">System</option>
+          </select>
+          <button type="button" id="refreshLogs" class="btn btn-ghost">Refresh</button>
+        </div>
+
+        <!-- Logs Table -->
+        <div class="table-container">
+          <table class="data-table" id="logsTable">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Admin</th>
+                <th>Action</th>
+                <th>Target</th>
+                <th>Details</th>
+                <th>IP</th>
+              </tr>
+            </thead>
+            <tbody id="logsTableBody">
+              <tr><td colspan="6" class="loading">Loading logs...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pagination">
+          <button type="button" id="logsPrev" class="btn btn-ghost" disabled>Previous</button>
+          <span id="logsPageInfo">Page 1</span>
+          <button type="button" id="logsNext" class="btn btn-ghost">Next</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modals -->
+  <!-- Edit User Modal -->
+  <div class="modal" id="editUserModal" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Manage User</h3>
+        <button type="button" class="modal-close" data-modal="editUserModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label>Email</label>
+          <input type="text" id="editUserEmail" readonly class="readonly">
+        </div>
+        <div class="field">
+          <label>Role</label>
+          <select id="editUserRole" class="modal-input">
+            <option value="participant">Participant</option>
+            <option value="organizer">Organizer</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Status</label>
+          <select id="editUserStatus" class="modal-input">
+            <option value="1">Active</option>
+            <option value="0">Disabled</option>
+          </select>
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="saveUser" class="btn btn-primary">Save Changes</button>
+          <button type="button" id="resetUserPassword" class="btn btn-secondary">Reset Password</button>
+          <button type="button" id="deleteUser" class="btn btn-danger">Delete User</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Event Detail Modal -->
+  <div class="modal" id="eventModal" style="display: none;">
+    <div class="modal-content modal-wide">
+      <div class="modal-header">
+        <h3 id="eventModalTitle">Event Details</h3>
+        <button type="button" class="modal-close" data-modal="eventModal">&times;</button>
+      </div>
+      <div class="modal-body" id="eventModalBody">
+        <!-- Dynamically populated -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmation Modal -->
+  <div class="modal" id="confirmModal" style="display: none;">
+    <div class="modal-content modal-small">
+      <div class="modal-header">
+        <h3>Confirm Action</h3>
+        <button type="button" class="modal-close" data-modal="confirmModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="confirmMessage">Are you sure?</p>
+        <div class="modal-actions">
+          <button type="button" id="confirmYes" class="btn btn-danger">Confirm</button>
+          <button type="button" id="confirmNo" class="btn btn-ghost">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="admin-home.js"></script>
+</body>
+</html>

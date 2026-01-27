@@ -106,20 +106,84 @@ const requireOrganizer = (req, res, next) => {
   if (!req.session.userId) {
     return res.status(401).json({ error: 'Authentication required' });
   }
-  if (req.session.role !== 'organizer') {
+  if (req.session.role !== 'organizer' && req.session.role !== 'admin') {
     return res.status(403).json({ error: 'Organizer access required' });
   }
   next();
 };
+
+const requireAdmin = (req, res, next) => {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  if (req.session.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+};
+
+// Helper: Log admin action
+async function logAdminAction(adminId, adminEmail, action, targetType, targetId, details, ipAddress) {
+  try {
+    await pool.query(
+      `INSERT INTO admin_logs (admin_id, admin_email, action, target_type, target_id, details, ip_address) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [adminId, adminEmail, action, targetType, targetId, JSON.stringify(details ?? {}), ipAddress]
+    );
+  } catch (e) {
+    console.error('Failed to log admin action:', e);
+  }
+}
+
+// Helper: Get system setting
+async function getSetting(key) {
+  try {
+    const [rows] = await pool.query('SELECT setting_value, setting_type FROM system_settings WHERE setting_key = ?', [key]);
+    if (!rows.length) return null;
+    const { setting_value, setting_type } = rows[0];
+    if (setting_type === 'boolean') return setting_value === 'true';
+    if (setting_type === 'number') return parseInt(setting_value, 10);
+    return setting_value;
+  } catch (e) {
+    console.error('Failed to get setting:', key, e);
+    return null;
+  }
+}
+
+// Helper: Get client IP
+function getClientIp(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'unknown';
+}
 
 // Helper: get user id from session (backward compatibility with header for existing code)
 const getUserId = (req) => {
   return req.session.userId || (req.headers['x-user-id'] ? parseInt(req.headers['x-user-id'], 10) : null);
 };
 
+// Maintenance mode: block non-admin write operations
+app.use(async (req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  if (req.path === '/login' || req.path === '/logout') return next();
+  try {
+    const maintenance = await getSetting('maintenance_mode');
+    if (maintenance && req.session?.role !== 'admin') {
+      return res.status(503).json({ success: false, message: 'System is in maintenance mode. Please try again later.' });
+    }
+  } catch (_) {
+    // If settings lookup fails, fall through to avoid blocking all writes.
+  }
+  next();
+});
+
 // ==================== AUTH ====================
 
 app.post('/register', async (req, res) => {
+  // Check if registrations are allowed
+  const allowRegistrations = await getSetting('allow_new_registrations');
+  if (allowRegistrations === false) {
+    return res.status(403).json({ success: false, message: 'New registrations are currently disabled' });
+  }
+
   const { email, password, role } = req.body;
   if (!email || !password) {
     return res.status(400).json({ success: false, message: 'Email and password are required' });
@@ -127,8 +191,10 @@ app.post('/register', async (req, res) => {
   if (password.length < 6) {
     return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
   }
-  const validRoles = ['admin', 'organizer', 'participant'];
-  const userRole = role && validRoles.includes(role.toLowerCase()) ? role.toLowerCase() : 'participant';
+  const requestedRole = role ? role.toLowerCase() : '';
+  const allowAdminSignup = process.env.ALLOW_ADMIN_SIGNUP === 'true';
+  const validRoles = allowAdminSignup ? ['admin', 'organizer', 'participant'] : ['organizer', 'participant'];
+  const userRole = validRoles.includes(requestedRole) ? requestedRole : 'participant';
 
   try {
     const [rows] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
@@ -139,6 +205,10 @@ app.post('/register', async (req, res) => {
     const [r] = await pool.query('INSERT INTO users (email, password, role) VALUES (?, ?, ?)', [email, hashed, userRole]);
     const uid = r.insertId;
     await pool.query('INSERT INTO user_profiles (user_id, full_name) VALUES (?, ?)', [uid, email.split('@')[0]]);
+    // Auto-login newly registered users
+    req.session.userId = uid;
+    req.session.role = userRole;
+    req.session.email = email;
     res.status(201).json({
       success: true,
       message: 'Account created successfully!',
@@ -159,6 +229,10 @@ app.post('/login', async (req, res) => {
     const user = rows[0];
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
+    }
+    // Check if account is active
+    if (!user.is_active || user.deleted_at) {
+      return res.status(403).json({ success: false, message: 'Account is disabled or deleted' });
     }
     // Set session
     req.session.userId = user.id;
@@ -361,6 +435,21 @@ app.post('/api/events/register', async (req, res) => {
   const { eventId } = req.body;
   if (!eventId) return res.status(400).json({ success: false, message: 'eventId required' });
   try {
+    const registrationsFrozen = await getSetting('registrations_frozen');
+    if (registrationsFrozen) {
+      return res.status(403).json({ success: false, message: 'Event registrations are currently frozen' });
+    }
+    const [events] = await pool.query('SELECT status, registration_deadline FROM events WHERE id = ?', [eventId]);
+    if (!events.length) return res.status(404).json({ success: false, message: 'Event not found' });
+    if (events[0].status !== 'published') {
+      return res.status(403).json({ success: false, message: 'Registrations are closed for this event' });
+    }
+    if (events[0].registration_deadline) {
+      const deadline = new Date(events[0].registration_deadline);
+      if (!isNaN(deadline.getTime()) && deadline.getTime() < Date.now()) {
+        return res.status(403).json({ success: false, message: 'Registration deadline has passed' });
+      }
+    }
     await pool.query('INSERT IGNORE INTO event_registrations (event_id, user_id) VALUES (?, ?)', [eventId, uid]);
     res.json({ success: true, message: 'Registered for event' });
   } catch (e) {
@@ -431,14 +520,30 @@ app.post('/api/events', requireOrganizer, async (req, res) => {
   }
   
   try {
+    // Check if approval workflow is enabled
+    const approvalRequired = await getSetting('event_approval_required');
+    const initialStatus = approvalRequired ? 'pending_approval' : 'draft';
+
+    const maxEvents = await getSetting('max_events_per_organizer');
+    if (Number.isFinite(maxEvents) && maxEvents > 0) {
+      const [countRows] = await pool.query('SELECT COUNT(*) as c FROM events WHERE created_by = ?', [req.session.userId]);
+      if (countRows[0].c >= maxEvents) {
+        return res.status(403).json({ error: `Event limit reached (${maxEvents}).` });
+      }
+    }
+
     const [r] = await pool.query(
       `INSERT INTO events (title, description, event_date, start_time, end_time, location, online_link, 
        max_participants, registration_deadline, created_by, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [title, description, event_date, start_time, end_time, location || null, online_link || null, 
-       maxParts, formattedDeadline, req.session.userId]
+       maxParts, formattedDeadline, req.session.userId, initialStatus]
     );
-    res.json({ message: 'Event created successfully', eventId: r.insertId });
+    res.json({ 
+      message: approvalRequired ? 'Event created and submitted for approval' : 'Event created successfully', 
+      eventId: r.insertId,
+      status: initialStatus
+    });
   } catch (e) {
     console.error('Error creating event:', e);
     console.error('Error code:', e.code);
@@ -502,6 +607,18 @@ app.put('/api/events/:id', requireOrganizer, async (req, res) => {
         formattedDeadline = null;
       }
     }
+
+    let normalizedStatus = status;
+    if (status !== undefined) {
+      const allowedStatuses = ['draft', 'pending_approval', 'published', 'closed'];
+      if (!allowedStatuses.includes(status)) {
+        return res.status(400).json({ error: 'Invalid status' });
+      }
+      const approvalRequired = await getSetting('event_approval_required');
+      if (approvalRequired && status === 'published') {
+        normalizedStatus = 'pending_approval';
+      }
+    }
     
     // Build update query
     const updates = [];
@@ -515,7 +632,7 @@ app.put('/api/events/:id', requireOrganizer, async (req, res) => {
     if (online_link !== undefined) { updates.push('online_link = ?'); values.push(online_link); }
     if (max_participants !== undefined) { updates.push('max_participants = ?'); values.push(parseInt(max_participants, 10)); }
     if (formattedDeadline !== undefined) { updates.push('registration_deadline = ?'); values.push(formattedDeadline); }
-    if (status !== undefined) { updates.push('status = ?'); values.push(status); }
+    if (normalizedStatus !== undefined) { updates.push('status = ?'); values.push(normalizedStatus); }
     
     if (updates.length === 0) {
       return res.json({ message: 'No changes provided' });
@@ -579,8 +696,10 @@ app.post('/api/events/:id/publish', requireOrganizer, async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
     
-    await pool.query('UPDATE events SET status = ? WHERE id = ?', ['published', eventId]);
-    res.json({ message: 'Event published successfully' });
+    const approvalRequired = await getSetting('event_approval_required');
+    const nextStatus = approvalRequired ? 'pending_approval' : 'published';
+    await pool.query('UPDATE events SET status = ? WHERE id = ?', [nextStatus, eventId]);
+    res.json({ message: approvalRequired ? 'Event submitted for approval' : 'Event published successfully', status: nextStatus });
   } catch (e) {
     console.error('Error publishing event:', e);
     res.status(500).json({ error: 'Database error' });
@@ -752,11 +871,445 @@ app.get('/api/messages/threads', async (req, res) => {
   }
 });
 
+// ==================== ADMIN: USER MANAGEMENT ====================
+
+app.get('/api/admin/users', requireAdmin, async (req, res) => {
+  const { search, role, status } = req.query;
+  try {
+    let query = `SELECT u.id, u.email, u.role, u.is_active, u.deleted_at, u.created_at, up.full_name, up.department 
+                 FROM users u LEFT JOIN user_profiles up ON u.id = up.user_id WHERE 1=1`;
+    const params = [];
+    if (search) {
+      query += ' AND (u.email LIKE ? OR up.full_name LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`);
+    }
+    if (role) {
+      query += ' AND u.role = ?';
+      params.push(role);
+    }
+    if (status === 'active') {
+      query += ' AND u.is_active = 1 AND u.deleted_at IS NULL';
+    } else if (status === 'disabled') {
+      query += ' AND (u.is_active = 0 OR u.deleted_at IS NOT NULL)';
+    }
+    query += ' ORDER BY u.created_at DESC';
+    const [rows] = await pool.query(query, params);
+    res.json({ success: true, users: rows });
+  } catch (e) {
+    console.error('Error fetching users:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.put('/api/admin/users/:id/role', requireAdmin, async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  const { role } = req.body;
+  if (!['admin', 'organizer', 'participant'].includes(role)) {
+    return res.status(400).json({ success: false, message: 'Invalid role' });
+  }
+  try {
+    const [user] = await pool.query('SELECT email, role FROM users WHERE id = ?', [userId]);
+    if (!user.length) return res.status(404).json({ success: false, message: 'User not found' });
+    await pool.query('UPDATE users SET role = ? WHERE id = ?', [role, userId]);
+    await logAdminAction(req.session.userId, req.session.email, 'role_change', 'user', userId, 
+      { old_role: user[0].role, new_role: role, target_email: user[0].email }, getClientIp(req));
+    res.json({ success: true, message: 'Role updated' });
+  } catch (e) {
+    console.error('Error updating role:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.put('/api/admin/users/:id/status', requireAdmin, async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  const { is_active } = req.body;
+  if (typeof is_active !== 'boolean') {
+    return res.status(400).json({ success: false, message: 'is_active must be boolean' });
+  }
+  try {
+    const [user] = await pool.query('SELECT email FROM users WHERE id = ?', [userId]);
+    if (!user.length) return res.status(404).json({ success: false, message: 'User not found' });
+    await pool.query('UPDATE users SET is_active = ? WHERE id = ?', [is_active ? 1 : 0, userId]);
+    await logAdminAction(req.session.userId, req.session.email, is_active ? 'enable_user' : 'disable_user', 
+      'user', userId, { target_email: user[0].email }, getClientIp(req));
+    res.json({ success: true, message: `User ${is_active ? 'enabled' : 'disabled'}` });
+  } catch (e) {
+    console.error('Error updating user status:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.post('/api/admin/users/:id/reset-password', requireAdmin, async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  const { newPassword } = req.body;
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+  }
+  try {
+    const [user] = await pool.query('SELECT email FROM users WHERE id = ?', [userId]);
+    if (!user.length) return res.status(404).json({ success: false, message: 'User not found' });
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE users SET password = ? WHERE id = ?', [hashed, userId]);
+    await logAdminAction(req.session.userId, req.session.email, 'reset_password', 'user', userId, 
+      { target_email: user[0].email }, getClientIp(req));
+    res.json({ success: true, message: 'Password reset successfully' });
+  } catch (e) {
+    console.error('Error resetting password:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  if (userId === req.session.userId) {
+    return res.status(403).json({ success: false, message: 'Cannot delete yourself' });
+  }
+  try {
+    const [user] = await pool.query('SELECT email FROM users WHERE id = ?', [userId]);
+    if (!user.length) return res.status(404).json({ success: false, message: 'User not found' });
+    await pool.query('UPDATE users SET deleted_at = NOW(), is_active = 0 WHERE id = ?', [userId]);
+    await logAdminAction(req.session.userId, req.session.email, 'soft_delete_user', 'user', userId, 
+      { target_email: user[0].email }, getClientIp(req));
+    res.json({ success: true, message: 'User deleted' });
+  } catch (e) {
+    console.error('Error deleting user:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+// ==================== ADMIN: EVENT OVERSIGHT ====================
+
+app.get('/api/admin/events', requireAdmin, async (req, res) => {
+  const { status, search } = req.query;
+  try {
+    let query = `SELECT e.*, u.email as organizer_email, up.full_name as organizer_name 
+                 FROM events e 
+                 JOIN users u ON e.created_by = u.id 
+                 LEFT JOIN user_profiles up ON u.id = up.user_id 
+                 WHERE 1=1`;
+    const params = [];
+    if (status) {
+      query += ' AND e.status = ?';
+      params.push(status);
+    }
+    if (search) {
+      query += ' AND (e.title LIKE ? OR e.description LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`);
+    }
+    query += ' ORDER BY e.created_at DESC';
+    const [rows] = await pool.query(query, params);
+    res.json({ success: true, events: rows });
+  } catch (e) {
+    console.error('Error fetching events:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.put('/api/admin/events/:id/approve', requireAdmin, async (req, res) => {
+  const eventId = parseInt(req.params.id, 10);
+  try {
+    const [event] = await pool.query('SELECT title, created_by FROM events WHERE id = ?', [eventId]);
+    if (!event.length) return res.status(404).json({ success: false, message: 'Event not found' });
+    await pool.query('UPDATE events SET status = ? WHERE id = ?', ['published', eventId]);
+    await pool.query('INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)', 
+      [event[0].created_by, 'Event Approved', `Your event "${event[0].title}" has been approved and published.`, 'event_approval']);
+    await logAdminAction(req.session.userId, req.session.email, 'approve_event', 'event', eventId, 
+      { event_title: event[0].title }, getClientIp(req));
+    res.json({ success: true, message: 'Event approved' });
+  } catch (e) {
+    console.error('Error approving event:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.put('/api/admin/events/:id/reject', requireAdmin, async (req, res) => {
+  const eventId = parseInt(req.params.id, 10);
+  const { reason } = req.body;
+  try {
+    const [event] = await pool.query('SELECT title, created_by FROM events WHERE id = ?', [eventId]);
+    if (!event.length) return res.status(404).json({ success: false, message: 'Event not found' });
+    await pool.query('UPDATE events SET status = ?, rejection_reason = ? WHERE id = ?', ['rejected', reason || null, eventId]);
+    await pool.query('INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)', 
+      [event[0].created_by, 'Event Rejected', `Your event "${event[0].title}" was rejected. ${reason ? 'Reason: ' + reason : ''}`, 'event_rejection']);
+    await logAdminAction(req.session.userId, req.session.email, 'reject_event', 'event', eventId, 
+      { event_title: event[0].title, reason }, getClientIp(req));
+    res.json({ success: true, message: 'Event rejected' });
+  } catch (e) {
+    console.error('Error rejecting event:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.put('/api/admin/events/:id', requireAdmin, async (req, res) => {
+  const eventId = parseInt(req.params.id, 10);
+  const { title, description, event_date, start_time, end_time, location, online_link, max_participants, status } = req.body;
+  try {
+    const updates = [];
+    const values = [];
+    if (title !== undefined) { updates.push('title = ?'); values.push(title); }
+    if (description !== undefined) { updates.push('description = ?'); values.push(description); }
+    if (event_date !== undefined) { updates.push('event_date = ?'); values.push(event_date); }
+    if (start_time !== undefined) { updates.push('start_time = ?'); values.push(start_time); }
+    if (end_time !== undefined) { updates.push('end_time = ?'); values.push(end_time); }
+    if (location !== undefined) { updates.push('location = ?'); values.push(location); }
+    if (online_link !== undefined) { updates.push('online_link = ?'); values.push(online_link); }
+    if (max_participants !== undefined) { updates.push('max_participants = ?'); values.push(max_participants); }
+    if (status !== undefined) { updates.push('status = ?'); values.push(status); }
+    if (updates.length === 0) return res.json({ success: true, message: 'No changes' });
+    values.push(eventId);
+    await pool.query(`UPDATE events SET ${updates.join(', ')} WHERE id = ?`, values);
+    await logAdminAction(req.session.userId, req.session.email, 'admin_edit_event', 'event', eventId, 
+      { updates: Object.keys(req.body) }, getClientIp(req));
+    res.json({ success: true, message: 'Event updated' });
+  } catch (e) {
+    console.error('Error updating event:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.post('/api/admin/events/:id/force-close', requireAdmin, async (req, res) => {
+  const eventId = parseInt(req.params.id, 10);
+  try {
+    const [event] = await pool.query('SELECT title FROM events WHERE id = ?', [eventId]);
+    if (!event.length) return res.status(404).json({ success: false, message: 'Event not found' });
+    await pool.query('UPDATE events SET status = ? WHERE id = ?', ['closed', eventId]);
+    await logAdminAction(req.session.userId, req.session.email, 'force_close_event', 'event', eventId, 
+      { event_title: event[0].title }, getClientIp(req));
+    res.json({ success: true, message: 'Event force-closed' });
+  } catch (e) {
+    console.error('Error force-closing event:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.delete('/api/admin/events/:id', requireAdmin, async (req, res) => {
+  const eventId = parseInt(req.params.id, 10);
+  try {
+    const [event] = await pool.query('SELECT title FROM events WHERE id = ?', [eventId]);
+    if (!event.length) return res.status(404).json({ success: false, message: 'Event not found' });
+    await pool.query('DELETE FROM events WHERE id = ?', [eventId]);
+    await logAdminAction(req.session.userId, req.session.email, 'delete_event', 'event', eventId, 
+      { event_title: event[0].title }, getClientIp(req));
+    res.json({ success: true, message: 'Event deleted' });
+  } catch (e) {
+    console.error('Error deleting event:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+// ==================== ADMIN: DASHBOARD ANALYTICS ====================
+
+app.get('/api/admin/stats', requireAdmin, async (req, res) => {
+  try {
+    const [userStats] = await pool.query(`
+      SELECT role, COUNT(*) as count 
+      FROM users 
+      WHERE is_active = 1 AND deleted_at IS NULL 
+      GROUP BY role
+    `);
+    const [eventStats] = await pool.query(`
+      SELECT status, COUNT(*) as count 
+      FROM events 
+      GROUP BY status
+    `);
+    const [upcoming] = await pool.query(`
+      SELECT COUNT(*) as count 
+      FROM events 
+      WHERE status = 'published' AND event_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)
+    `);
+    res.json({ 
+      success: true, 
+      stats: { usersByRole: userStats, eventsByStatus: eventStats, upcomingEvents: upcoming[0].count } 
+    });
+  } catch (e) {
+    console.error('Error fetching stats:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.get('/api/admin/recent', requireAdmin, async (req, res) => {
+  try {
+    const [users] = await pool.query(`
+      SELECT u.id, u.email, u.role, u.created_at, up.full_name 
+      FROM users u 
+      LEFT JOIN user_profiles up ON u.id = up.user_id 
+      WHERE u.is_active = 1 AND u.deleted_at IS NULL 
+      ORDER BY u.created_at DESC LIMIT 10
+    `);
+    const [events] = await pool.query(`
+      SELECT e.id, e.title, e.status, e.created_at, u.email as organizer_email 
+      FROM events e 
+      JOIN users u ON e.created_by = u.id 
+      ORDER BY e.created_at DESC LIMIT 10
+    `);
+    res.json({ success: true, recentUsers: users, recentEvents: events });
+  } catch (e) {
+    console.error('Error fetching recent data:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.get('/api/admin/top-organizers', requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT u.id, u.email, up.full_name, COUNT(e.id) as event_count 
+      FROM users u 
+      JOIN events e ON u.id = e.created_by 
+      LEFT JOIN user_profiles up ON u.id = up.user_id 
+      WHERE u.role = 'organizer' 
+      GROUP BY u.id 
+      ORDER BY event_count DESC 
+      LIMIT 10
+    `);
+    res.json({ success: true, organizers: rows });
+  } catch (e) {
+    console.error('Error fetching top organizers:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+// ==================== ADMIN: AUDIT LOGS ====================
+
+app.get('/api/admin/logs', requireAdmin, async (req, res) => {
+  const { page = 1, limit = 50, action, target_type } = req.query;
+  const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+  try {
+    let query = 'SELECT * FROM admin_logs WHERE 1=1';
+    const params = [];
+    if (action) {
+      query += ' AND action = ?';
+      params.push(action);
+    }
+    if (target_type) {
+      query += ' AND target_type = ?';
+      params.push(target_type);
+    }
+    query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    params.push(parseInt(limit, 10), offset);
+    const [rows] = await pool.query(query, params);
+
+    let countQuery = 'SELECT COUNT(*) as total FROM admin_logs WHERE 1=1';
+    const countParams = [];
+    if (action) {
+      countQuery += ' AND action = ?';
+      countParams.push(action);
+    }
+    if (target_type) {
+      countQuery += ' AND target_type = ?';
+      countParams.push(target_type);
+    }
+    const [countResult] = await pool.query(countQuery, countParams);
+    res.json({ success: true, logs: rows, total: countResult[0].total });
+  } catch (e) {
+    console.error('Error fetching logs:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+// ==================== ADMIN: SYSTEM SETTINGS ====================
+
+app.get('/api/admin/settings', requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM system_settings ORDER BY setting_key');
+    res.json({ success: true, settings: rows });
+  } catch (e) {
+    console.error('Error fetching settings:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.put('/api/admin/settings', requireAdmin, async (req, res) => {
+  const { settings } = req.body;
+  if (!settings || typeof settings !== 'object') {
+    return res.status(400).json({ success: false, message: 'Invalid settings format' });
+  }
+  try {
+    for (const [key, value] of Object.entries(settings)) {
+      await pool.query(
+        'UPDATE system_settings SET setting_value = ?, updated_by = ? WHERE setting_key = ?',
+        [String(value), req.session.userId, key]
+      );
+    }
+    await logAdminAction(req.session.userId, req.session.email, 'update_settings', 'setting', null, 
+      { settings }, getClientIp(req));
+    res.json({ success: true, message: 'Settings updated' });
+  } catch (e) {
+    console.error('Error updating settings:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+// ==================== ADMIN: EMERGENCY CONTROLS ====================
+
+app.post('/api/admin/emergency/force-logout-all', requireAdmin, async (req, res) => {
+  try {
+    // Note: Express sessions are stored in memory by default. For production, use express-session with a store.
+    // This is a simplified implementation - in production, you'd clear the session store.
+    await logAdminAction(req.session.userId, req.session.email, 'force_logout_all', 'system', null, 
+      { note: 'All users will be logged out on next request' }, getClientIp(req));
+    res.json({ success: true, message: 'Force logout initiated (requires session store cleanup)' });
+  } catch (e) {
+    console.error('Error forcing logout:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.post('/api/admin/emergency/disable-all-events', requireAdmin, async (req, res) => {
+  try {
+    const [result] = await pool.query('UPDATE events SET status = ? WHERE status IN (?, ?)', ['closed', 'published', 'pending_approval']);
+    await logAdminAction(req.session.userId, req.session.email, 'disable_all_events', 'system', null, 
+      { affected_count: result.affectedRows }, getClientIp(req));
+    res.json({ success: true, message: `${result.affectedRows} events closed` });
+  } catch (e) {
+    console.error('Error disabling events:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.post('/api/admin/emergency/freeze-registrations', requireAdmin, async (req, res) => {
+  const { freeze } = req.body;
+  if (typeof freeze !== 'boolean') {
+    return res.status(400).json({ success: false, message: 'freeze must be boolean' });
+  }
+  try {
+    await pool.query(
+      'UPDATE system_settings SET setting_value = ?, updated_by = ? WHERE setting_key = ?',
+      [freeze ? 'true' : 'false', req.session.userId, 'registrations_frozen']
+    );
+    await logAdminAction(req.session.userId, req.session.email, freeze ? 'freeze_registrations' : 'unfreeze_registrations', 
+      'system', null, {}, getClientIp(req));
+    res.json({ success: true, message: `Registrations ${freeze ? 'frozen' : 'unfrozen'}` });
+  } catch (e) {
+    console.error('Error toggling registrations:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
 // ==================== ROUTES & STATIC ====================
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'login.html')));
-app.get('/student-home', (req, res) => res.sendFile(path.join(__dirname, 'student-home.html')));
-app.get('/organizer-home', (req, res) => res.sendFile(path.join(__dirname, 'organizer-home.html')));
+app.get('/student-home', (req, res) => {
+  if (!req.session.userId) return res.redirect('/');
+  if (req.session.role === 'organizer') return res.redirect('/organizer-home');
+  if (req.session.role === 'admin') return res.redirect('/admin-home');
+  return res.sendFile(path.join(__dirname, 'student-home.html'));
+});
+app.get('/organizer-home', (req, res) => {
+  if (!req.session.userId) return res.redirect('/');
+  if (req.session.role === 'participant') return res.redirect('/student-home');
+  if (req.session.role === 'admin' || req.session.role === 'organizer') {
+    return res.sendFile(path.join(__dirname, 'organizer-home.html'));
+  }
+  return res.redirect('/');
+});
+app.get('/admin-home', (req, res) => {
+  if (!req.session.userId) return res.redirect('/');
+  if (req.session.role !== 'admin') {
+    if (req.session.role === 'organizer') return res.redirect('/organizer-home');
+    return res.redirect('/student-home');
+  }
+  return res.sendFile(path.join(__dirname, 'admin-home.html'));
+});
 
 // ==================== SERVER ====================
 

@@ -3,8 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RBAC Login System</title>
+    <title>Campus Hub — Sign in</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="container">
@@ -94,7 +97,6 @@
                         <option value="">Select a role</option>
                         <option value="participant" selected>Participant</option>
                         <option value="organizer">Organizer</option>
-                        <option value="admin">Admin</option>
                     </select>
                 </div>
 
@@ -109,35 +111,6 @@
             <!-- Toggle between Login and Sign Up -->
             <div class="form-toggle">
                 <p id="toggleText">Don't have an account? <a href="#" onclick="toggleForm(event)">Sign up</a></p>
-            </div>
-
-            <!-- <div class="demo-accounts">
-                <p class="demo-title">Demo Accounts:</p>
-                <div class="demo-list">
-                    <div class="demo-item">
-                        <strong>Admin:</strong> admin@example.com / password123
-                    </div>
-                    <div class="demo-item">
-                        <strong>Organizer:</strong> organizer@example.com / password123
-                    </div>
-                    <div class="demo-item">
-                        <strong>Participant:</strong> participant@example.com / password123
-                    </div> -->
-                </div>
-            </div>
-        </div>
-
-        <div id="dashboard" class="dashboard" style="display: none;">
-            <div class="dashboard-header">
-                <h2>Dashboard</h2>
-                <button onclick="logout()" class="logout-btn">Logout</button>
-            </div>
-            <div class="dashboard-content">
-                <div class="user-info">
-                    <h3>Welcome, <span id="userEmail"></span>!</h3>                    cp .env.example .env
-                    <div class="role-badge" id="roleBadge"></div>
-                </div>
-                <div class="role-content" id="roleContent"></div>
             </div>
         </div>
     </div>

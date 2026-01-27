@@ -119,15 +119,15 @@
               </div>
               <div class="stat-item">
                 <span class="stat-value" id="statPending">0</span>
-                <span class="stat-label">Pending</span>
+                <span class="stat-label">Pending Approval</span>
               </div>
               <div class="stat-item">
                 <span class="stat-value" id="statApproved">0</span>
-                <span class="stat-label">Approved</span>
+                <span class="stat-label">Published</span>
               </div>
               <div class="stat-item">
                 <span class="stat-value" id="statCompleted">0</span>
-                <span class="stat-label">Completed</span>
+                <span class="stat-label">Closed / Rejected</span>
               </div>
             </div>
             <a href="#events" class="btn btn-ghost">Manage events</a>
@@ -212,7 +212,9 @@
             <select id="statusFilter" class="filter-select">
               <option value="">All Events</option>
               <option value="draft">Draft</option>
+              <option value="pending_approval">Pending Approval</option>
               <option value="published">Published</option>
+              <option value="rejected">Rejected</option>
               <option value="closed">Closed</option>
             </select>
           </div>

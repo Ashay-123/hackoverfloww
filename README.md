@@ -58,6 +58,7 @@ By default the app uses:
 Override with env:
 
 - `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`
+- `ALLOW_ADMIN_SIGNUP=true` (optional, allow admin role during sign-up)
 
 ### 4. Run
 
@@ -65,7 +66,7 @@ Override with env:
   npm start
   ```
 
-  Open: `http://localhost:3000`
+  Open: `http://localhost:3001`
 
 ### 5. Test accounts
 
