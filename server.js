@@ -9,8 +9,10 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 const publicDir = path.join(__dirname, 'public');
+const isProduction = process.env.NODE_ENV === 'production';
 
-// MySQL config - set DB_HOST, DB_USER, DB_PASSWORD, DB_NAME in env or use defaults
+// MySQL config - set DB_HOST, DB_USER, DB_PASSWORD, DB_NAME in env or use defaults.
+// These values also work for hosted MySQL (Render, Railway, AWS RDS, etc.).
 const dbConfig = {
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
@@ -23,8 +25,13 @@ const dbConfig = {
 
 let pool;
 
-// Ensure target database exists before creating the pool
+// Ensure target database exists before creating the pool (local development only).
+// For hosted databases, DB_HOST will typically not be localhost and this will be skipped.
 async function ensureDatabaseExists() {
+  if (dbConfig.host !== 'localhost' && dbConfig.host !== '127.0.0.1') {
+    // Do not attempt to CREATE DATABASE against hosted/remote MySQL instances.
+    return;
+  }
   const { database, ...baseConfig } = dbConfig;
   const conn = await mysql.createConnection({ ...baseConfig, multipleStatements: true });
   await conn.query(`CREATE DATABASE IF NOT EXISTS \`${database}\``);
@@ -62,7 +69,11 @@ async function seedIfEmpty() {
 
 async function initDb() {
   try {
-    await ensureDatabaseExists();
+    // In local development, attempt to create the database automatically.
+    // In production, prefer running database.sql manually during provisioning.
+    if (!isProduction) {
+      await ensureDatabaseExists();
+    }
     pool = mysql.createPool(dbConfig);
     await pool.query('SELECT 1');
     console.log('Connected to MySQL database');
@@ -76,10 +87,16 @@ async function initDb() {
 }
 
 // Middleware
-app.use(cors({
-  origin: true, // Allow all origins for development (use specific origin in production)
+const corsOriginEnv = process.env.CORS_ORIGIN;
+const corsOptions = {
+  // If CORS_ORIGIN is set, use it (single origin or comma-separated list).
+  // Otherwise, reflect the request origin (convenient for local development).
+  origin: corsOriginEnv
+    ? corsOriginEnv.split(',').map(o => o.trim()).filter(Boolean)
+    : true,
   credentials: true
-}));
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.static(publicDir));
 
@@ -1389,13 +1406,28 @@ app.get('/admin-home', (req, res) => {
 
 // ==================== SERVER ====================
 
-initDb().then(() => {
-  app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
-});
+initDb()
+  .then(() => {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    // If DB init fails, log the error and exit so the platform can restart the service.
+    console.error('Failed to initialize database:', err);
+    process.exit(1);
+  });
 
 process.on('SIGINT', async () => {
   if (pool) await pool.end();
   process.exit(0);
 });
 
+// Prevent the process from crashing on unexpected errors in production.
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled promise rejection:', err);
+});
 
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});

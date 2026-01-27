@@ -1,7 +1,16 @@
 -- Unified Campus Resource & Event Management System
 -- MySQL Schema
--- Run: mysql -u root -p < database.sql
--- Or: create DB first: CREATE DATABASE IF NOT EXISTS campus_db; USE campus_db; then run the rest.
+-- Usage (local development):
+--   mysql -u root -p < database.sql
+--   or:
+--     CREATE DATABASE IF NOT EXISTS campus_db;
+--     USE campus_db;
+--     then run the rest of this file.
+--
+-- IMPORTANT:
+-- - Run this file once when provisioning a new database.
+-- - Do NOT run it repeatedly against a production database with live data,
+--   as some sections (e.g. event tables) clean up existing structures.
 
 CREATE DATABASE IF NOT EXISTS campus_db;
 USE campus_db;
