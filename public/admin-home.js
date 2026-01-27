@@ -250,7 +250,7 @@
     }
     tbody.innerHTML = users.map(u => {
       const status = u.is_active && !u.deleted_at ? 'active' : 'disabled';
-      return `<tr>
+      return `<tr data-user-row="${u.id}">
         <td>${escapeHtml(u.email)}</td>
         <td>${escapeHtml(u.full_name || '—')}</td>
         <td><span class="role-badge ${u.role}">${u.role}</span></td>
@@ -258,12 +258,28 @@
         <td>${formatDate(u.created_at)}</td>
         <td class="table-actions">
           <button type="button" class="btn btn-ghost" data-edit-user="${u.id}">Edit</button>
+          <button type="button" class="btn btn-danger" data-delete-user="${u.id}">Delete</button>
         </td>
       </tr>`;
     }).join('');
 
     tbody.querySelectorAll('[data-edit-user]').forEach(btn => {
       btn.addEventListener('click', () => openEditUserModal(parseInt(btn.dataset.editUser, 10), users));
+    });
+    tbody.querySelectorAll('[data-delete-user]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const userId = parseInt(btn.dataset.deleteUser, 10);
+        if (!confirm('Delete this user? This will soft-delete their account.')) return;
+        try {
+          await del(`/api/admin/users/${userId}`);
+          showMessage($('userMessage'), 'User deleted');
+          // Remove row from table immediately
+          const row = tbody.querySelector(`[data-user-row="${userId}"]`);
+          if (row) row.remove();
+        } catch (e) {
+          showMessage($('userMessage'), 'Failed to delete user', 'error');
+        }
+      });
     });
   }
 

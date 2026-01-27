@@ -512,7 +512,7 @@ app.get('/api/organizer/events', requireOrganizer, async (req, res) => {
        ORDER BY event_date ASC, start_time ASC`,
       [req.session.userId]
     );
-    res.json(rows);
+    res.json({ success: true, events: rows });
   } catch (e) {
     console.error('Error fetching events:', e);
     res.status(500).json({ error: 'Database error' });
@@ -964,6 +964,9 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
       query += ' AND u.is_active = 1 AND u.deleted_at IS NULL';
     } else if (status === 'disabled') {
       query += ' AND (u.is_active = 0 OR u.deleted_at IS NOT NULL)';
+    } else if (!status) {
+      // Default: only show not-deleted users
+      query += ' AND u.deleted_at IS NULL';
     }
     query += ' ORDER BY u.created_at DESC';
     const [rows] = await pool.query(query, params);
@@ -1136,7 +1139,7 @@ app.put('/api/admin/events/:id', requireAdmin, async (req, res) => {
     res.json({ success: true, message: 'Event updated' });
   } catch (e) {
     console.error('Error updating event:', e);
-    res.status(500).json({ success: false, message: 'Database error' });
+    res.status(500).json({ error: 'Database error' });
   }
 });
 
@@ -1166,7 +1169,7 @@ app.delete('/api/admin/events/:id', requireAdmin, async (req, res) => {
     res.json({ success: true, message: 'Event deleted' });
   } catch (e) {
     console.error('Error deleting event:', e);
-    res.status(500).json({ success: false, message: 'Database error' });
+    res.status(500).json({ error: 'Database error' });
   }
 });
 
@@ -1394,3 +1397,5 @@ process.on('SIGINT', async () => {
   if (pool) await pool.end();
   process.exit(0);
 });
+
+
