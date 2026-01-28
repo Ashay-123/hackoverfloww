@@ -234,6 +234,12 @@ async function findOrLinkOAuthUser(profile) {
   if (!byEmail.length) return null;
 
   const existing = byEmail[0];
+  
+  // BLOCK: User signed up manually with email+password, prevent OAuth login
+  if (existing.oauth_provider === 'local') {
+    throw new Error('Account already exists. Please log in using email and password.');
+  }
+  
   if (existing.oauth_provider && existing.oauth_provider !== provider) {
     throw new Error('Account is linked to a different OAuth provider');
   }
@@ -324,7 +330,7 @@ app.post('/register', async (req, res) => {
       return res.status(409).json({ success: false, message: 'Email already registered.' });
     }
     const hashed = await bcrypt.hash(password, 10);
-    const [r] = await pool.query('INSERT INTO users (email, password, role) VALUES (?, ?, ?)', [email, hashed, userRole]);
+    const [r] = await pool.query('INSERT INTO users (email, password, role, oauth_provider) VALUES (?, ?, ?, ?)', [email, hashed, userRole, 'local']);
     const uid = r.insertId;
     await pool.query('INSERT INTO user_profiles (user_id, full_name) VALUES (?, ?)', [uid, email.split('@')[0]]);
     // Auto-login newly registered users
@@ -391,6 +397,10 @@ app.get('/auth/google/callback', (req, res, next) => {
     if (err || !user) {
       if (err) console.error('Google OAuth error:', err);
       const reason = info?.message || 'OAuth login failed. Please try again.';
+      // Check if this is the "local account exists" error
+      if (info?.message === 'Account already exists. Please log in using email and password.') {
+        return res.redirect('/login?error=account_exists');
+      }
       return res.redirect('/?oauth=failed&reason=' + encodeURIComponent(reason));
     }
     req.logIn(user, (loginErr) => {

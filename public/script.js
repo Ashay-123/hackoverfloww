@@ -219,14 +219,28 @@ window.addEventListener("DOMContentLoaded", () => {
     const params = new URLSearchParams(window.location.search);
     const oauthStatus = params.get("oauth");
     const oauthReason = params.get("reason");
-    if (oauthStatus === "failed") {
-        const messageDiv = document.getElementById("message");
+    const errorCode = params.get("error");
+    const messageDiv = document.getElementById("message");
+    
+    // Handle account_exists error (local account blocking OAuth)
+    if (errorCode === "account_exists") {
+        if (messageDiv) {
+            messageDiv.className = "message error";
+            messageDiv.textContent = "Account already exists. Please log in using email and password.";
+            messageDiv.style.display = "block";
+        }
+        // Clean up URL
+        window.history.replaceState({}, document.title, "/login");
+    }
+    // Handle other OAuth failures
+    else if (oauthStatus === "failed") {
         if (messageDiv) {
             messageDiv.className = "message error";
             messageDiv.textContent = oauthReason || "OAuth login failed. Please try again.";
             messageDiv.style.display = "block";
         }
     }
+    
     const userData = sessionStorage.getItem("user");
     if (userData) {
         try {
