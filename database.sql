@@ -133,6 +133,36 @@ CREATE TABLE IF NOT EXISTS event_registrations (
 CREATE INDEX idx_registrations_user ON event_registrations(user_id);
 CREATE INDEX idx_registrations_event ON event_registrations(event_id);
 
+-- ==================== EVENT NOTIFICATIONS ====================
+CREATE TABLE IF NOT EXISTS event_notifications (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    event_id INT NOT NULL,
+    sender_id INT NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_event_notifications_event ON event_notifications(event_id);
+CREATE INDEX idx_event_notifications_sender ON event_notifications(sender_id);
+
+CREATE TABLE IF NOT EXISTS event_notification_recipients (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    notification_id INT NOT NULL,
+    user_id INT NOT NULL,
+    is_read TINYINT(1) DEFAULT 0,
+    read_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_recipient (notification_id, user_id),
+    FOREIGN KEY (notification_id) REFERENCES event_notifications(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_event_notification_recipients_user ON event_notification_recipients(user_id);
+CREATE INDEX idx_event_notification_recipients_read ON event_notification_recipients(user_id, is_read);
+
 -- ==================== RESOURCES (Rooms, Equipment) ====================
 CREATE TABLE IF NOT EXISTS resource_types (
     id INT PRIMARY KEY AUTO_INCREMENT,

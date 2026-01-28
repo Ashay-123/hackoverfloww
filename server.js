@@ -1058,6 +1058,146 @@ app.patch('/api/notifications/:id/read', requireAuth, async (req, res) => {
   }
 });
 
+// ==================== EVENT NOTIFICATIONS (Organizer → Participants) ====================
+
+// POST /organizer/events/:eventId/notifications
+// Organizer sends a notification to all registered participants of an event
+app.post('/organizer/events/:eventId/notifications', requireOrganizer, async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { title, message } = req.body;
+    const userId = req.session.userId;
+
+    if (!title || !message) {
+      return res.status(400).json({ success: false, error: 'Title and message required' });
+    }
+
+    // Verify organizer owns this event
+    const [events] = await pool.query(
+      'SELECT id FROM events WHERE id = ? AND created_by = ?',
+      [eventId, userId]
+    );
+
+    if (events.length === 0) {
+      return res.status(403).json({ success: false, error: 'Unauthorized' });
+    }
+
+    // Fetch all registered participants
+    const [participants] = await pool.query(
+      `SELECT user_id FROM event_registrations 
+       WHERE event_id = ? AND status = 'registered'`,
+      [eventId]
+    );
+
+    if (participants.length === 0) {
+      return res.json({ success: true, message: 'No participants to notify' });
+    }
+
+    // Insert notification once
+    const [notifResult] = await pool.query(
+      `INSERT INTO event_notifications (event_id, sender_id, title, message) 
+       VALUES (?, ?, ?, ?)`,
+      [eventId, userId, title, message]
+    );
+
+    const notificationId = notifResult.insertId;
+
+    // Build recipient data
+    const recipientData = participants.map(p => [notificationId, p.user_id]);
+
+    // Bulk insert all recipients with correct mysql2 syntax
+    if (recipientData.length > 0) {
+      await pool.query(
+        `INSERT INTO event_notification_recipients (notification_id, user_id) 
+         VALUES ${recipientData.map(() => '(?, ?)').join(', ')}`,
+        recipientData.flat()
+      );
+    }
+
+    await logAdminAction(userId, req.session.email, 'send_event_notification', 'event', eventId,
+      { notification_id: notificationId, recipient_count: participants.length }, getClientIp(req));
+
+    res.json({
+      success: true,
+      message: `Notification sent to ${participants.length} participants`,
+      notification_id: notificationId
+    });
+  } catch (err) {
+    console.error('POST /organizer/events/:eventId/notifications error:', err);
+    res.status(500).json({ success: false, error: 'Failed to send notification' });
+  }
+});
+
+// GET /participant/events/:eventId/notifications
+app.get('/participant/events/:eventId/notifications', requireAuth, async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const userId = req.session.userId;
+
+    // Verify user is registered for the event
+    const [registered] = await pool.query(
+      `SELECT id FROM event_registrations 
+       WHERE event_id = ? AND user_id = ? AND status = 'registered'`,
+      [eventId, userId]
+    );
+
+    if (registered.length === 0) {
+      return res.status(403).json({ success: false, error: 'Not registered for this event' });
+    }
+
+    // Get notifications
+    const [notifications] = await pool.query(
+      `SELECT en.id, en.title, en.message, en.created_at, enr.is_read,
+              u.email as sender_email,
+              up.full_name as sender_name
+       FROM event_notifications en
+       JOIN event_notification_recipients enr ON en.id = enr.notification_id
+       LEFT JOIN users u ON en.sender_id = u.id
+       LEFT JOIN user_profiles up ON u.id = up.user_id
+       WHERE en.event_id = ? AND enr.user_id = ?
+       ORDER BY en.created_at DESC`,
+      [eventId, userId]
+    );
+
+    res.json({ success: true, notifications });
+  } catch (err) {
+    console.error('GET /participant/events/:eventId/notifications error:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch notifications' });
+  }
+});
+
+// PATCH /participant/notifications/:notificationId/read
+app.patch('/participant/notifications/:notificationId/read', requireAuth, async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    const userId = req.session.userId;
+
+    // Verify user is a recipient of this notification
+    const [recipient] = await pool.query(
+      `SELECT id FROM event_notification_recipients 
+       WHERE notification_id = ? AND user_id = ?`,
+      [notificationId, userId]
+    );
+
+    if (recipient.length === 0) {
+      return res.status(403).json({ success: false, error: 'Unauthorized' });
+    }
+
+    // Mark as read
+    await pool.query(
+      `UPDATE event_notification_recipients 
+       SET is_read = 1, read_at = NOW() 
+       WHERE notification_id = ? AND user_id = ?`,
+      [notificationId, userId]
+    );
+
+    res.json({ success: true, message: 'Notification marked as read' });
+  } catch (err) {
+    console.error('PATCH /participant/notifications/:notificationId/read error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update notification' });
+  }
+});
+
 // ==================== MESSAGES (thread list for sidebar) ====================
 
 app.get('/api/messages/threads', requireAuth, async (req, res) => {
