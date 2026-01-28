@@ -398,7 +398,7 @@ app.get('/auth/google/callback', (req, res, next) => {
       if (err) console.error('Google OAuth error:', err);
       const reason = info?.message || 'OAuth login failed. Please try again.';
       // Check if this is the "local account exists" error
-      if (info?.message === 'Account already exists. Please log in using email and password.') {
+      if (info?.message && info.message.includes('Account already exists with email and password')) {
         return res.redirect('/login?error=account_exists');
       }
       return res.redirect('/?oauth=failed&reason=' + encodeURIComponent(reason));
