@@ -520,40 +520,40 @@
 
   // ---------- Notifications ----------
   function loadNotifications() {
-    const el = $('notificationsList');
-    if (el) {
-      get('/api/notifications').then(r => {
-        const arr = r.notifications || [];
-        el.innerHTML = arr.length ? arr.map(n => {
-          const cls = n.is_read ? '' : ' style="background:rgba(124,156,255,0.08)"';
-          return '<div class="item-row" data-id="' + n.id + '"' + cls + '><div><h4>' + escapeHtml(n.title) + '</h4><p class="meta">' + escapeHtml(n.message || '') + ' · ' + formatDateTime(n.created_at) + '</p></div>' + (n.is_read ? '' : '<button type="button" class="btn btn-ghost" style="margin:0" data-read="' + n.id + '">Mark read</button>') + '</div>';
-        }).join('') : '<p class="muted">No notifications.</p>';
-        el.querySelectorAll('[data-read]').forEach(btn => {
-          btn.addEventListener('click', function () {
-            patch('/api/notifications/' + this.dataset.read + '/read').then(() => { loadNotifications(); updateNotifBadge(); });
-          });
-        });
-      });
-    }
+    const eventEl = $('eventNotificationsList');
+    const systemEl = $('systemNotificationsList');
+    if (eventEl) eventEl.innerHTML = '<p class="muted">Loading event updates...</p>';
+    if (systemEl) systemEl.innerHTML = '<p class="muted">Loading system alerts...</p>';
+
+    Promise.all([fetchEventNotifications(), fetchSystemNotifications()]).then(([eventNotifs, systemNotifs]) => {
+      renderEventNotifications(eventNotifs || []);
+      renderSystemNotifications(systemNotifs || []);
+      updateNotifCounts(eventNotifs || [], systemNotifs || []);
+    }).catch(() => {
+      if (eventEl) eventEl.innerHTML = '<div class="notif-empty">Could not load event notifications.</div>';
+      if (systemEl) systemEl.innerHTML = '<div class="notif-empty">Could not load system notifications.</div>';
+    });
   }
 
   function loadRecentNotifs() {
     const el = $('recentNotifs');
     if (!el) return;
-    get('/api/notifications').then(r => {
-      const arr = (r.notifications || []).slice(0, 4);
-      el.innerHTML = arr.length ? '<ul class="list">' + arr.map(n =>
-        '<li>' + escapeHtml(n.title) + ' <span class="muted">' + formatDateTime(n.created_at) + '</span></li>'
+    Promise.all([fetchEventNotifications(), fetchSystemNotifications()]).then(([eventNotifs, systemNotifs]) => {
+      const combined = normalizeNotifications(eventNotifs, systemNotifs).slice(0, 4);
+      el.innerHTML = combined.length ? '<ul class="list">' + combined.map(n =>
+        '<li>' + escapeHtml(n.title) + ' <span class="muted">• ' + escapeHtml(n._label) + '</span> <span class="muted">' + formatDateTime(n.created_at) + '</span></li>'
       ).join('') + '</ul>' : '<span class="empty">No notifications.</span>';
+    }).catch(() => {
+      el.innerHTML = '<span class="empty">No notifications.</span>';
     });
   }
 
   function updateNotifBadge() {
-    get('/api/notifications').then(r => {
-      const n = (r.notifications || []).filter(x => !x.is_read).length;
+    Promise.all([fetchEventNotifications(), fetchSystemNotifications()]).then(([eventNotifs, systemNotifs]) => {
+      const n = (eventNotifs || []).filter(x => !x.is_read).length + (systemNotifs || []).filter(x => !x.is_read).length;
       const b = $('notifBadge');
       if (b) { b.textContent = n; b.style.display = n ? 'flex' : 'none'; }
-    });
+    }).catch(() => {});
   }
 
   // ---------- Messages (threads) ----------
@@ -588,6 +588,126 @@
       if (isNaN(d.getTime())) return s;
       return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
     } catch (_) { return s; }
+  }
+
+  function fetchEventNotifications() {
+    return get('/participant/notifications').then(r => r.notifications || []);
+  }
+
+  function fetchSystemNotifications() {
+    return get('/api/notifications').then(r => r.notifications || []);
+  }
+
+  function updateNotifCounts(eventNotifs, systemNotifs) {
+    const eventUnread = eventNotifs.filter(n => !n.is_read).length;
+    const systemUnread = systemNotifs.filter(n => !n.is_read).length;
+    if ($('eventNotifCount')) {
+      $('eventNotifCount').textContent = `${eventUnread} unread • ${eventNotifs.length} total`;
+    }
+    if ($('systemNotifCount')) {
+      $('systemNotifCount').textContent = `${systemUnread} unread • ${systemNotifs.length} total`;
+    }
+  }
+
+  function normalizeNotifications(eventNotifs, systemNotifs) {
+    const eventList = (eventNotifs || []).map(n => ({
+      ...n,
+      _kind: 'event',
+      _label: n.event_title || 'Event update',
+      _ts: toTimestamp(n.created_at)
+    }));
+    const systemList = (systemNotifs || []).map(n => ({
+      ...n,
+      _kind: 'system',
+      _label: formatSystemLabel(n),
+      _ts: toTimestamp(n.created_at)
+    }));
+    return eventList.concat(systemList).sort((a, b) => b._ts - a._ts);
+  }
+
+  function formatSystemLabel(n) {
+    if (!n) return 'System';
+    if (n.type) return n.type.replace(/_/g, ' ');
+    if (n.ref_type) return n.ref_type;
+    return 'System';
+  }
+
+  function toTimestamp(value) {
+    const t = new Date(value).getTime();
+    return Number.isFinite(t) ? t : 0;
+  }
+
+  function renderEventNotifications(list) {
+    const el = $('eventNotificationsList');
+    if (!el) return;
+    if (!list.length) {
+      el.innerHTML = '<div class="notif-empty">No event updates yet.</div>';
+      return;
+    }
+    el.innerHTML = list.map(n => {
+      const eventTitle = n.event_title || (n.event_id ? `Event #${n.event_id}` : 'Event update');
+      const sender = n.sender_name || n.sender_email || 'Organizer';
+      const unread = n.is_read ? '' : ' unread';
+      const markRead = n.is_read ? '' : '<button type="button" class="btn btn-ghost btn-xs" data-event-read="' + n.id + '">Mark read</button>';
+      return `<div class="notif-card${unread}">
+        <div class="notif-header">
+          <span class="notif-event">${escapeHtml(eventTitle)}</span>
+          <span class="notif-time">${formatDateTime(n.created_at)}</span>
+        </div>
+        <div class="notif-title">${escapeHtml(n.title)}</div>
+        <div class="notif-message">${escapeHtml(n.message || '')}</div>
+        <div class="notif-footer">
+          <span class="notif-sender">From ${escapeHtml(sender)}</span>
+          ${markRead}
+        </div>
+      </div>`;
+    }).join('');
+
+    el.querySelectorAll('[data-event-read]').forEach(btn => {
+      btn.addEventListener('click', function () {
+        patch('/participant/notifications/' + this.dataset.eventRead + '/read').then(() => {
+          loadNotifications();
+          loadRecentNotifs();
+          updateNotifBadge();
+        });
+      });
+    });
+  }
+
+  function renderSystemNotifications(list) {
+    const el = $('systemNotificationsList');
+    if (!el) return;
+    if (!list.length) {
+      el.innerHTML = '<div class="notif-empty">No system notifications yet.</div>';
+      return;
+    }
+    el.innerHTML = list.map(n => {
+      const label = formatSystemLabel(n);
+      const unread = n.is_read ? '' : ' unread';
+      const markRead = n.is_read ? '' : '<button type="button" class="btn btn-ghost btn-xs" data-system-read="' + n.id + '">Mark read</button>';
+      return `<div class="notif-card${unread}">
+        <div class="notif-header">
+          <span class="notif-event">${escapeHtml(label)}</span>
+          <span class="notif-time">${formatDateTime(n.created_at)}</span>
+        </div>
+        <div class="notif-title">${escapeHtml(n.title)}</div>
+        <div class="notif-message">${escapeHtml(n.message || '')}</div>
+        <div class="notif-footer">
+          <span class="notif-sender">System</span>
+          ${markRead}
+        </div>
+      </div>`;
+    }).join('');
+
+    el.querySelectorAll('[data-system-read]').forEach(btn => {
+      btn.addEventListener('click', function () {
+        patch('/api/notifications/' + this.dataset.systemRead + '/read').then(() => {
+          loadNotifications();
+          loadRecentNotifs();
+          updateNotifBadge();
+        });
+      });
+    });
   }
 
   // ---------- Init ----------
