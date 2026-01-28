@@ -208,11 +208,10 @@ function redirectPathForRole(role) {
   return '/student-home';
 }
 
-async function findOrCreateOAuthUser(profile) {
+async function findOrLinkOAuthUser(profile) {
   const provider = 'google';
   const oauthId = profile?.id;
   const email = profile?.emails?.[0]?.value?.toLowerCase() || null;
-  const displayName = profile?.displayName || null;
 
   if (!oauthId) {
     throw new Error('Missing OAuth profile id');
@@ -224,41 +223,28 @@ async function findOrCreateOAuthUser(profile) {
   );
   if (byOauth.length) return byOauth[0];
 
-  if (email) {
-    const [byEmail] = await pool.query(
-      'SELECT id, email, role, is_active, deleted_at, oauth_provider, oauth_id FROM users WHERE email = ? LIMIT 1',
-      [email]
-    );
-    if (byEmail.length) {
-      const existing = byEmail[0];
-      if (!existing.oauth_provider && !existing.oauth_id) {
-        await pool.query('UPDATE users SET oauth_provider = ?, oauth_id = ? WHERE id = ?', [provider, oauthId, existing.id]);
-        return { ...existing, oauth_provider: provider, oauth_id: oauthId };
-      }
-      if (existing.oauth_provider === provider && (!existing.oauth_id || existing.oauth_id === oauthId)) {
-        if (!existing.oauth_id) {
-          await pool.query('UPDATE users SET oauth_id = ? WHERE id = ?', [oauthId, existing.id]);
-          return { ...existing, oauth_provider: provider, oauth_id: oauthId };
-        }
-        return existing;
-      }
-      throw new Error('Email already linked to a different OAuth account');
-    }
+  if (!email) {
+    return null;
   }
 
-  const fallbackEmail = email || `google_${oauthId}@example.invalid`;
-  const [result] = await pool.query(
-    'INSERT INTO users (email, password, role, oauth_provider, oauth_id) VALUES (?, ?, ?, ?, ?)',
-    [fallbackEmail, null, 'participant', provider, oauthId]
+  const [byEmail] = await pool.query(
+    'SELECT id, email, role, is_active, deleted_at, oauth_provider, oauth_id FROM users WHERE email = ? LIMIT 1',
+    [email]
   );
-  const userId = result.insertId;
-  const profileName = displayName || (email ? email.split('@')[0] : `User ${userId}`);
-  await pool.query('INSERT INTO user_profiles (user_id, full_name) VALUES (?, ?)', [userId, profileName]);
-  const [created] = await pool.query(
-    'SELECT id, email, role, is_active, deleted_at, oauth_provider, oauth_id FROM users WHERE id = ? LIMIT 1',
-    [userId]
-  );
-  return created[0];
+  if (!byEmail.length) return null;
+
+  const existing = byEmail[0];
+  if (existing.oauth_provider && existing.oauth_provider !== provider) {
+    throw new Error('Account is linked to a different OAuth provider');
+  }
+  if (existing.oauth_id && existing.oauth_id !== oauthId) {
+    throw new Error('OAuth account mismatch for this email');
+  }
+  if (!existing.oauth_provider || !existing.oauth_id) {
+    await pool.query('UPDATE users SET oauth_provider = ?, oauth_id = ? WHERE id = ?', [provider, oauthId, existing.id]);
+    return { ...existing, oauth_provider: provider, oauth_id: oauthId };
+  }
+  return existing;
 }
 
 passport.serializeUser((user, done) => done(null, user.id));
@@ -280,12 +266,18 @@ passport.use(new GoogleStrategy({
   state: true
 }, async (accessToken, refreshToken, profile, done) => {
   try {
-    const user = await findOrCreateOAuthUser(profile);
-    if (!user || !user.is_active || user.deleted_at) {
+    const user = await findOrLinkOAuthUser(profile);
+    if (!user) {
+      return done(null, false, { message: 'No account found. Please sign up first.' });
+    }
+    if (!user.is_active || user.deleted_at) {
       return done(null, false, { message: 'Account is disabled or deleted' });
     }
     return done(null, { id: user.id, email: user.email, role: user.role });
   } catch (err) {
+    if (err && err.message) {
+      return done(null, false, { message: err.message });
+    }
     return done(err);
   }
 }));
@@ -395,9 +387,11 @@ app.get('/auth/google', passport.authenticate('google', {
 }));
 
 app.get('/auth/google/callback', (req, res, next) => {
-  passport.authenticate('google', { failureRedirect: '/?oauth=failed', session: true }, (err, user) => {
+  passport.authenticate('google', { session: true }, (err, user, info) => {
     if (err || !user) {
-      return res.redirect('/?oauth=failed');
+      if (err) console.error('Google OAuth error:', err);
+      const reason = info?.message || 'OAuth login failed. Please try again.';
+      return res.redirect('/?oauth=failed&reason=' + encodeURIComponent(reason));
     }
     req.logIn(user, (loginErr) => {
       if (loginErr) return next(loginErr);

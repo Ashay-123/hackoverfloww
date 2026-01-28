@@ -216,6 +216,17 @@ function handleSignup(event) {
 
 // Check if user is already logged in on page load
 window.addEventListener("DOMContentLoaded", () => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthStatus = params.get("oauth");
+    const oauthReason = params.get("reason");
+    if (oauthStatus === "failed") {
+        const messageDiv = document.getElementById("message");
+        if (messageDiv) {
+            messageDiv.className = "message error";
+            messageDiv.textContent = oauthReason || "OAuth login failed. Please try again.";
+            messageDiv.style.display = "block";
+        }
+    }
     const userData = sessionStorage.getItem("user");
     if (userData) {
         try {
