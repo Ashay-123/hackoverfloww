@@ -19,7 +19,9 @@ USE campus_db;
 CREATE TABLE IF NOT EXISTS users (
     id INT PRIMARY KEY AUTO_INCREMENT,
     email VARCHAR(255) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL,
+    password VARCHAR(255) NULL,
+    oauth_provider VARCHAR(50) NULL,
+    oauth_id VARCHAR(255) NULL,
     role ENUM('admin', 'organizer', 'participant') NOT NULL DEFAULT 'participant',
     is_active TINYINT(1) DEFAULT 1,
     deleted_at TIMESTAMP NULL DEFAULT NULL,
@@ -28,6 +30,7 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX idx_users_email ON users(email);
+CREATE UNIQUE INDEX uniq_users_oauth ON users(oauth_provider, oauth_id);
 
 -- ==================== USER PROFILES ====================
 CREATE TABLE IF NOT EXISTS user_profiles (

@@ -254,7 +254,8 @@
     if (!el) return;
     el.innerHTML = '<p class="muted">Loading events...</p>';
     
-    get('/api/organizer/events').then(events => {
+    get('/api/organizer/events').then(res => {
+      const events = Array.isArray(res) ? res : (res.events || []);
       allEvents = Array.isArray(events) ? events : [];
       renderEvents();
     }).catch(err => {
@@ -343,7 +344,8 @@
   $('statusFilter')?.addEventListener('change', renderEvents);
 
   function loadEventsStats() {
-    get('/api/organizer/events').then(events => {
+    get('/api/organizer/events').then(res => {
+      const events = Array.isArray(res) ? res : (res.events || []);
       const arr = Array.isArray(events) ? events : [];
       const stats = { draft: 0, pending_approval: 0, published: 0, closed: 0, rejected: 0 };
       arr.forEach(e => {

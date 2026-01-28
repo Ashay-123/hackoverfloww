@@ -4,6 +4,8 @@ const mysql = require('mysql2/promise');
 const path = require('path');
 const cors = require('cors');
 const session = require('express-session');
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
 require('dotenv').config();
 
 const app = express();
@@ -111,6 +113,8 @@ app.use(session({
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
+app.use(passport.initialize());
+app.use(passport.session());
 
 // Auth middleware
 const requireAuth = (req, res, next) => {
@@ -197,6 +201,94 @@ function toMySqlDateTimeLocal(date) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
+
+function redirectPathForRole(role) {
+  if (role === 'admin') return '/admin-home';
+  if (role === 'organizer') return '/organizer-home';
+  return '/student-home';
+}
+
+async function findOrCreateOAuthUser(profile) {
+  const provider = 'google';
+  const oauthId = profile?.id;
+  const email = profile?.emails?.[0]?.value?.toLowerCase() || null;
+  const displayName = profile?.displayName || null;
+
+  if (!oauthId) {
+    throw new Error('Missing OAuth profile id');
+  }
+
+  const [byOauth] = await pool.query(
+    'SELECT id, email, role, is_active, deleted_at, oauth_provider, oauth_id FROM users WHERE oauth_provider = ? AND oauth_id = ? LIMIT 1',
+    [provider, oauthId]
+  );
+  if (byOauth.length) return byOauth[0];
+
+  if (email) {
+    const [byEmail] = await pool.query(
+      'SELECT id, email, role, is_active, deleted_at, oauth_provider, oauth_id FROM users WHERE email = ? LIMIT 1',
+      [email]
+    );
+    if (byEmail.length) {
+      const existing = byEmail[0];
+      if (!existing.oauth_provider && !existing.oauth_id) {
+        await pool.query('UPDATE users SET oauth_provider = ?, oauth_id = ? WHERE id = ?', [provider, oauthId, existing.id]);
+        return { ...existing, oauth_provider: provider, oauth_id: oauthId };
+      }
+      if (existing.oauth_provider === provider && (!existing.oauth_id || existing.oauth_id === oauthId)) {
+        if (!existing.oauth_id) {
+          await pool.query('UPDATE users SET oauth_id = ? WHERE id = ?', [oauthId, existing.id]);
+          return { ...existing, oauth_provider: provider, oauth_id: oauthId };
+        }
+        return existing;
+      }
+      throw new Error('Email already linked to a different OAuth account');
+    }
+  }
+
+  const fallbackEmail = email || `google_${oauthId}@example.invalid`;
+  const [result] = await pool.query(
+    'INSERT INTO users (email, password, role, oauth_provider, oauth_id) VALUES (?, ?, ?, ?, ?)',
+    [fallbackEmail, null, 'participant', provider, oauthId]
+  );
+  const userId = result.insertId;
+  const profileName = displayName || (email ? email.split('@')[0] : `User ${userId}`);
+  await pool.query('INSERT INTO user_profiles (user_id, full_name) VALUES (?, ?)', [userId, profileName]);
+  const [created] = await pool.query(
+    'SELECT id, email, role, is_active, deleted_at, oauth_provider, oauth_id FROM users WHERE id = ? LIMIT 1',
+    [userId]
+  );
+  return created[0];
+}
+
+passport.serializeUser((user, done) => done(null, user.id));
+
+passport.deserializeUser(async (id, done) => {
+  try {
+    const [rows] = await pool.query('SELECT id, email, role, is_active, deleted_at FROM users WHERE id = ? LIMIT 1', [id]);
+    if (!rows.length) return done(null, false);
+    return done(null, rows[0]);
+  } catch (err) {
+    return done(err);
+  }
+});
+
+passport.use(new GoogleStrategy({
+  clientID: process.env.GOOGLE_CLIENT_ID,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  callbackURL: process.env.GOOGLE_CALLBACK_URL || '/auth/google/callback',
+  state: true
+}, async (accessToken, refreshToken, profile, done) => {
+  try {
+    const user = await findOrCreateOAuthUser(profile);
+    if (!user || !user.is_active || user.deleted_at) {
+      return done(null, false, { message: 'Account is disabled or deleted' });
+    }
+    return done(null, { id: user.id, email: user.email, role: user.role });
+  } catch (err) {
+    return done(err);
+  }
+}));
 
 // Maintenance mode: block non-admin write operations
 app.use(async (req, res, next) => {
@@ -293,6 +385,28 @@ app.post('/logout', (req, res) => {
     }
     res.json({ success: true, message: 'Logged out successfully' });
   });
+});
+
+// ==================== OAUTH: GOOGLE ====================
+
+app.get('/auth/google', passport.authenticate('google', {
+  scope: ['profile', 'email'],
+  prompt: 'select_account'
+}));
+
+app.get('/auth/google/callback', (req, res, next) => {
+  passport.authenticate('google', { failureRedirect: '/?oauth=failed', session: true }, (err, user) => {
+    if (err || !user) {
+      return res.redirect('/?oauth=failed');
+    }
+    req.logIn(user, (loginErr) => {
+      if (loginErr) return next(loginErr);
+      req.session.userId = user.id;
+      req.session.role = user.role;
+      req.session.email = user.email;
+      return res.redirect(redirectPathForRole(user.role));
+    });
+  })(req, res, next);
 });
 
 // ==================== USER PROFILE ====================
