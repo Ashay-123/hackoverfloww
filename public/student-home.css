@@ -432,6 +432,7 @@ body {
 }
 .event-badge.published { background: rgba(74,222,128,0.2); color: var(--success); }
 .event-badge.closed { background: rgba(248,113,113,0.2); color: var(--error); }
+.event-badge.completed { background: rgba(124,156,255,0.2); color: var(--accent); }
 
 .event-body {
   padding: 20px;
@@ -580,4 +581,88 @@ body {
   .event-header { flex-direction: column; align-items: flex-start; }
   .event-content { flex-direction: column; align-items: flex-start; }
   .toast-notification { right: 16px; left: 16px; min-width: 0; }
+}
+
+/* ===== Messaging ===== */
+.message-layout {
+  gap: 16px;
+}
+
+.message-panel {
+  min-height: 460px;
+}
+
+.message-split {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+}
+
+.message-thread-list {
+  border-right: 1px solid var(--border);
+  padding-right: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.message-thread-item {
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.message-thread-item.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.message-thread-item .meta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.message-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.message-bubble {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.message-bubble.me {
+  background: rgba(124, 156, 255, 0.18);
+  border: 1px solid rgba(124, 156, 255, 0.3);
+}
+
+.message-send {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.message-send input {
+  flex: 1;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+
+@media (max-width: 800px) {
+  .message-split {
+    grid-template-columns: 1fr;
+  }
+  .message-thread-list {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+  }
 }

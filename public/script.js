@@ -89,20 +89,24 @@ function toggleForm(event) {
     
     const loginForm = document.getElementById("loginForm");
     const signupForm = document.getElementById("signupForm");
+    const otpForm = document.getElementById("otpForm");
     const headerTitle = document.getElementById("headerTitle");
     const headerSubtitle = document.getElementById("headerSubtitle");
     const toggleText = document.getElementById("toggleText");
     const messageDiv = document.getElementById("message");
     const signupMessageDiv = document.getElementById("signupMessage");
+    const otpMessageDiv = document.getElementById("otpMessage");
     
     // Clear messages
     messageDiv.style.display = "none";
     signupMessageDiv.style.display = "none";
+    if (otpMessageDiv) otpMessageDiv.style.display = "none";
     
     if (loginForm.style.display === "none") {
         // Show login form
         loginForm.style.display = "block";
         signupForm.style.display = "none";
+        if (otpForm) otpForm.style.display = "none";
         headerTitle.textContent = "Welcome Back";
         headerSubtitle.textContent = "Sign in to your account";
         toggleText.innerHTML = 'Don\'t have an account? <a href="#" onclick="toggleForm(event)">Sign up</a>';
@@ -110,10 +114,113 @@ function toggleForm(event) {
         // Show sign-up form
         loginForm.style.display = "none";
         signupForm.style.display = "block";
+        if (otpForm) otpForm.style.display = "none";
         headerTitle.textContent = "Create Account";
         headerSubtitle.textContent = "Sign up to get started";
         toggleText.innerHTML = 'Already have an account? <a href="#" onclick="toggleForm(event)">Sign in</a>';
     }
+}
+
+function toggleOtp(event) {
+    event.preventDefault();
+    const loginForm = document.getElementById("loginForm");
+    const signupForm = document.getElementById("signupForm");
+    const otpForm = document.getElementById("otpForm");
+    const headerTitle = document.getElementById("headerTitle");
+    const headerSubtitle = document.getElementById("headerSubtitle");
+    if (!otpForm) return;
+
+    const isOtpVisible = otpForm.style.display === "block";
+    if (isOtpVisible) {
+        otpForm.style.display = "none";
+        loginForm.style.display = "block";
+        signupForm.style.display = "none";
+        headerTitle.textContent = "Welcome Back";
+        headerSubtitle.textContent = "Sign in to your account";
+    } else {
+        otpForm.style.display = "block";
+        loginForm.style.display = "none";
+        signupForm.style.display = "none";
+        headerTitle.textContent = "OTP Login";
+        headerSubtitle.textContent = "Sign in with a one-time code";
+    }
+}
+
+function requestOtp(event) {
+    if (event) event.preventDefault();
+    const email = document.getElementById("otpEmail").value.trim();
+    const otpMessage = document.getElementById("otpMessage");
+    if (!email) {
+        otpMessage.className = "message error";
+        otpMessage.textContent = "Enter your email to request an OTP.";
+        otpMessage.style.display = "block";
+        return;
+    }
+    otpMessage.className = "message";
+    otpMessage.textContent = "";
+    otpMessage.style.display = "none";
+
+    fetch("/auth/request-otp", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+    })
+    .then(res => res.json())
+    .then(data => {
+        otpMessage.className = data.success ? "message success" : "message error";
+        otpMessage.textContent = data.message || (data.success ? "OTP sent" : "Failed to send OTP");
+        otpMessage.style.display = "block";
+        if (data.otp) {
+            document.getElementById("otpCode").value = data.otp;
+        }
+    })
+    .catch(err => {
+        otpMessage.className = "message error";
+        otpMessage.textContent = "Server error. Please try again.";
+        otpMessage.style.display = "block";
+        console.error("OTP request error:", err);
+    });
+}
+
+function handleOtpVerify(event) {
+    event.preventDefault();
+    const email = document.getElementById("otpEmail").value.trim();
+    const code = document.getElementById("otpCode").value.trim();
+    const otpMessage = document.getElementById("otpMessage");
+    if (!email || !code) {
+        otpMessage.className = "message error";
+        otpMessage.textContent = "Enter email and OTP code.";
+        otpMessage.style.display = "block";
+        return;
+    }
+
+    fetch("/auth/verify-otp", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, code })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            otpMessage.className = "message success";
+            otpMessage.textContent = data.message || "OTP verified";
+            otpMessage.style.display = "block";
+            sessionStorage.setItem("user", JSON.stringify(data.user));
+            setTimeout(() => redirectByRole(data.user), 800);
+        } else {
+            otpMessage.className = "message error";
+            otpMessage.textContent = data.message || "OTP verification failed";
+            otpMessage.style.display = "block";
+        }
+    })
+    .catch(err => {
+        otpMessage.className = "message error";
+        otpMessage.textContent = "Server error. Please try again.";
+        otpMessage.style.display = "block";
+        console.error("OTP verify error:", err);
+    });
 }
 
 // Handle sign-up form submission

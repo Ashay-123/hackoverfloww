@@ -274,9 +274,38 @@
       <section id="messages" class="section">
         <h1 class="section-title">Messages</h1>
         <p class="section-desc">One-to-one and group chats</p>
-        <div class="card">
-          <p class="muted">Messages and threads will appear here. Use club or event chats for collaboration.</p>
-          <div id="messageThreads" class="list-compact">No threads yet.</div>
+        <div class="grid-2 message-layout">
+          <div class="card">
+            <h3>Start a chat</h3>
+            <div class="field">
+              <label>Direct message</label>
+              <input type="text" id="dmSearch" placeholder="Search by name or email">
+              <div id="dmResults" class="list-compact"></div>
+            </div>
+            <div class="field">
+              <label>Club chat</label>
+              <select id="clubChatSelect"></select>
+              <button type="button" id="createClubChat" class="btn btn-ghost">Open club chat</button>
+            </div>
+            <div class="field">
+              <label>Event chat</label>
+              <select id="eventChatSelect"></select>
+              <button type="button" id="createEventChat" class="btn btn-ghost">Open event chat</button>
+            </div>
+          </div>
+          <div class="card message-panel">
+            <div class="message-split">
+              <div class="message-thread-list" id="messageThreads">No threads yet.</div>
+              <div class="message-thread-view">
+                <div id="messageThreadHeader" class="muted">Select a conversation</div>
+                <div id="messageList" class="message-list"></div>
+                <form id="messageSendForm" class="message-send">
+                  <input type="text" id="messageInput" placeholder="Type a message..." required>
+                  <button type="submit" class="btn btn-primary">Send</button>
+                </form>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 

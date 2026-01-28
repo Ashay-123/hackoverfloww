@@ -3,6 +3,9 @@
 
   const API = '';
   let user = null;
+  let selectedThreadId = null;
+  let threadsCache = [];
+  let clubOptions = [];
 
   function getUser() {
     if (user) return user;
@@ -238,7 +241,9 @@
       }
       
       el.innerHTML = arr.map(e => {
-        const date = formatDate(e.event_date);
+        const date = e.end_date && e.end_date !== e.event_date
+          ? `${formatDate(e.event_date)} - ${formatDate(e.end_date)}`
+          : formatDate(e.event_date);
         const timeRange = e.start_time && e.end_time ? `${e.start_time.slice(0, 5)} - ${e.end_time.slice(0, 5)}` : '';
         const locationType = e.online_link ? '🌐 Online' : '📍 In-person';
         const locationText = e.online_link ? 'Online Event' : (e.location || 'TBD');
@@ -247,7 +252,7 @@
         const deadlineText = e.registration_deadline ? '<div><strong>Registration Deadline:</strong> ' + formatDateTime(e.registration_deadline) + '</div>' : '';
         const deadline = e.registration_deadline ? new Date(e.registration_deadline) : null;
         const deadlinePassed = deadline && deadline.getTime() < Date.now();
-        const isClosed = status === 'closed';
+        const isClosed = status === 'closed' || status === 'completed';
         const canRegister = !isClosed && !deadlinePassed;
         const registerLabel = isClosed ? 'Event closed' : deadlinePassed ? 'Registration closed' : 'Register Now';
         const registerButton = canRegister
@@ -285,6 +290,10 @@
                 <span><strong>Capacity:</strong> ${maxParts}</span>
               </div>
               ${deadlineText}
+              <div class="event-detail">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                <span><strong>Visibility:</strong> ${escapeHtml(e.visibility || 'public')}</span>
+              </div>
             </div>
           </div>
           <div class="event-footer">
@@ -315,7 +324,9 @@
       }
       
       el.innerHTML = arr.map(e => {
-        const date = formatDate(e.event_date);
+        const date = e.end_date && e.end_date !== e.event_date
+          ? `${formatDate(e.event_date)} - ${formatDate(e.end_date)}`
+          : formatDate(e.event_date);
         const timeRange = e.start_time && e.end_time ? `${e.start_time.slice(0, 5)} - ${e.end_time.slice(0, 5)}` : '';
         const locationType = e.online_link ? '🌐 Online' : '📍';
         const locationText = e.location || 'Online Event';
@@ -338,6 +349,7 @@
           </div>
         </div>`;
       }).join('');
+      loadEventChatOptions();
     }).catch(() => { 
       el.innerHTML = '<div class="card"><p class="muted" style="text-align:center; padding:2rem;">❌ Could not load your registrations.<br>Please refresh the page.</p></div>'; 
     });
@@ -362,6 +374,7 @@
           loadEvents();
           loadRegistered();
           loadUpcoming();
+          loadEventChatOptions();
           showNotification('Successfully registered for the event!', 'success');
         }, 1000);
       } else {
@@ -405,7 +418,7 @@
     get('/api/events').then(r => {
       const arr = (r.events || []).slice(0, 4);
       el.innerHTML = arr.length ? '<ul class="list">' + arr.map(e =>
-        '<li>' + escapeHtml(e.title) + ' <span class="muted">' + formatDate(e.event_date) + '</span></li>'
+        '<li>' + escapeHtml(e.title) + ' <span class="muted">' + (e.end_date && e.end_date !== e.event_date ? (formatDate(e.event_date) + ' - ' + formatDate(e.end_date)) : formatDate(e.event_date)) + '</span></li>'
       ).join('') + '</ul>' : '<span class="empty">No upcoming events.</span>';
     });
   }
@@ -429,8 +442,24 @@
       const arr = r.bookings || [];
       el.innerHTML = arr.length ? arr.map(b => {
         const start = formatDateTime(b.start_datetime);
-        return '<div class="item-row"><div><h4>' + escapeHtml(b.resource_name) + '</h4><p class="meta">' + start + ' <span class="status ' + (b.status || 'pending') + '">' + (b.status || 'pending') + '</span></p></div></div>';
+        const canCancel = b.status === 'pending' || b.status === 'approved';
+        return `<div class="item-row" data-booking-row="${b.id}">
+          <div>
+            <h4>${escapeHtml(b.resource_name)}</h4>
+            <p class="meta">${start} <span class="status ${b.status || 'pending'}">${b.status || 'pending'}</span></p>
+          </div>
+          ${canCancel ? `<button type="button" class="btn btn-ghost" data-booking-cancel="${b.id}">Cancel</button>` : ''}
+        </div>`;
       }).join('') : '<p class="muted">No bookings.</p>';
+      el.querySelectorAll('[data-booking-cancel]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (!confirm('Cancel this booking?')) return;
+          put(`/api/resources/bookings/${btn.dataset.bookingCancel}/cancel`, {}).then(r2 => {
+            if (r2.success) { loadBookings(); loadMyBookingsDashboard(); }
+            else alert(r2.message || 'Failed.');
+          });
+        });
+      });
     });
   }
 
@@ -495,7 +524,7 @@
         el.querySelectorAll('[data-club-id]').forEach(btn => {
           btn.addEventListener('click', function () {
             post('/api/clubs/join', { clubId: parseInt(this.dataset.clubId, 10) }).then(res => {
-              if (res.success) { loadClubsExplore(); loadMyClubs(); loadMyClubsDashboard(); loadProfileClubs(); alert('Joined.'); }
+              if (res.success) { loadClubsExplore(); loadMyClubs(); loadMyClubsDashboard(); loadProfileClubs(); loadClubChatOptions(); alert('Joined.'); }
               else alert(res.message || 'Failed.');
             });
           });
@@ -542,17 +571,143 @@
     });
   }
 
-  // ---------- Messages (threads) ----------
+  // ---------- Messages ----------
   function loadMessageThreads() {
     const el = $('messageThreads');
     if (!el) return;
     get('/api/messages/threads').then(r => {
-      const arr = r.threads || [];
-      el.innerHTML = arr.length ? '<ul class="list">' + arr.map(t =>
-        '<li>Thread #' + t.id + ' (' + (t.type || 'direct') + ')</li>'
-      ).join('') + '</ul>' : 'No threads yet.';
+      threadsCache = r.threads || [];
+      renderThreadList();
     }).catch(() => { el.innerHTML = 'Could not load.'; });
   }
+
+  function renderThreadList() {
+    const el = $('messageThreads');
+    if (!el) return;
+    if (!threadsCache.length) {
+      el.innerHTML = '<span class="empty">No threads yet.</span>';
+      return;
+    }
+    el.innerHTML = threadsCache.map(t => `
+      <div class="message-thread-item ${selectedThreadId === t.id ? 'active' : ''}" data-thread-id="${t.id}">
+        <strong>${escapeHtml(t.title || `#${t.id} ${t.type}`)}</strong>
+        <div class="meta">${escapeHtml(t.last_message || 'No messages yet')}</div>
+      </div>
+    `).join('');
+    el.querySelectorAll('[data-thread-id]').forEach(btn => {
+      btn.addEventListener('click', () => openThread(parseInt(btn.dataset.threadId, 10)));
+    });
+  }
+
+  function loadClubChatOptions() {
+    const select = $('clubChatSelect');
+    if (!select) return;
+    get('/api/profile/clubs').then(r => {
+      const all = r.all || [];
+      select.innerHTML = all.length
+        ? '<option value="">Select club</option>' + all.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')
+        : '<option value="">No clubs</option>';
+    });
+  }
+
+  function loadEventChatOptions() {
+    const select = $('eventChatSelect');
+    if (!select) return;
+    get('/api/events/registered').then(r => {
+      const arr = r.events || [];
+      select.innerHTML = arr.length
+        ? '<option value="">Select event</option>' + arr.map(e => `<option value="${e.id}">${escapeHtml(e.title)}</option>`).join('')
+        : '<option value="">No events</option>';
+    });
+  }
+
+  function openThread(threadId) {
+    selectedThreadId = threadId;
+    renderThreadList();
+    $('messageThreadHeader').textContent = 'Loading...';
+    get(`/api/messages/threads/${threadId}`).then(r => {
+      if (!r.success) return;
+      $('messageThreadHeader').textContent = r.thread.title || `Thread #${r.thread.id}`;
+    });
+    get(`/api/messages/threads/${threadId}/messages`).then(r => {
+      if (!r.success) return;
+      renderMessages(r.messages || []);
+    });
+  }
+
+  function renderMessages(messages) {
+    const el = $('messageList');
+    if (!el) return;
+    if (!messages.length) {
+      el.innerHTML = '<p class="muted">No messages yet.</p>';
+      return;
+    }
+    el.innerHTML = messages.map(m => `
+      <div class="message-bubble ${m.sender_id === user.id ? 'me' : ''}">
+        <div><strong>${escapeHtml(m.full_name || m.email)}</strong></div>
+        <div>${escapeHtml(m.body)}</div>
+        <div class="meta">${formatDateTime(m.created_at)}</div>
+      </div>
+    `).join('');
+    el.scrollTop = el.scrollHeight;
+  }
+
+  $('messageSendForm')?.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (!selectedThreadId) return alert('Select a thread first.');
+    const body = $('messageInput').value.trim();
+    if (!body) return;
+    post(`/api/messages/threads/${selectedThreadId}/messages`, { body }).then(r => {
+      if (!r.success) return alert(r.message || 'Failed to send');
+      $('messageInput').value = '';
+      openThread(selectedThreadId);
+      loadMessageThreads();
+    });
+  });
+
+  $('dmSearch')?.addEventListener('input', debounce(function () {
+    const q = $('dmSearch').value.trim();
+    const results = $('dmResults');
+    if (!q) { results.innerHTML = ''; return; }
+    get('/api/users/search?q=' + encodeURIComponent(q)).then(r => {
+      const arr = r.users || [];
+      results.innerHTML = arr.length ? arr.map(u =>
+        `<div class="item-row"><div><strong>${escapeHtml(u.full_name || u.email)}</strong><span class="muted"> • ${escapeHtml(u.email || '')}</span></div>
+         <button type="button" class="btn btn-ghost" data-dm-user="${u.id}">Start</button></div>`
+      ).join('') : '<span class="empty">No users found.</span>';
+      results.querySelectorAll('[data-dm-user]').forEach(btn => {
+        btn.addEventListener('click', () => createDirectThread(parseInt(btn.dataset.dmUser, 10)));
+      });
+    });
+  }, 400));
+
+  function createDirectThread(userId) {
+    post('/api/messages/threads', { type: 'direct', userId }).then(r => {
+      if (!r.success) return alert(r.message || 'Failed to create thread');
+      loadMessageThreads();
+      openThread(r.threadId);
+    });
+  }
+
+  $('createClubChat')?.addEventListener('click', () => {
+    const clubId = $('clubChatSelect').value;
+    if (!clubId) return alert('Select a club');
+    post('/api/messages/threads', { type: 'club', clubId }).then(r => {
+      if (!r.success) return alert(r.message || 'Failed');
+      loadMessageThreads();
+      openThread(r.threadId);
+    });
+  });
+
+  $('createEventChat')?.addEventListener('click', () => {
+    const eventId = $('eventChatSelect').value;
+    if (!eventId) return alert('Select an event');
+    post('/api/messages/threads', { type: 'event', eventId }).then(r => {
+      if (!r.success) return alert(r.message || 'Failed');
+      loadMessageThreads();
+      openThread(r.threadId);
+    });
+  });
 
   // ---------- Helpers ----------
   function escapeHtml(s) {
@@ -576,6 +731,14 @@
     } catch (_) { return s; }
   }
 
+  function debounce(fn, delay) {
+    let timeout;
+    return function (...args) {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => fn.apply(this, args), delay);
+    };
+  }
+
   // ---------- Init ----------
   function init() {
     const u = getUser();
@@ -597,6 +760,8 @@
     loadResourceOptions();
     loadMyClubs();
     loadClubsExplore();
+    loadClubChatOptions();
+    loadEventChatOptions();
   }
 
   init();

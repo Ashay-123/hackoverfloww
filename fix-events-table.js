@@ -29,13 +29,21 @@ async function fixEventsTable() {
         title VARCHAR(255) NOT NULL,
         description TEXT NOT NULL,
         event_date DATE NOT NULL,
+        end_date DATE NULL,
         start_time TIME NOT NULL,
         end_time TIME NOT NULL,
         location VARCHAR(255) NULL,
         online_link VARCHAR(255) NULL,
         max_participants INT DEFAULT 0 NOT NULL,
         registration_deadline DATETIME NULL,
-        status ENUM('draft', 'published', 'closed') DEFAULT 'draft' NOT NULL,
+        visibility ENUM('public', 'internal', 'club') DEFAULT 'public' NOT NULL,
+        status ENUM('draft', 'pending_approval', 'published', 'rejected', 'closed', 'completed') DEFAULT 'draft' NOT NULL,
+        rejection_reason TEXT NULL,
+        budget_total DECIMAL(10,2) DEFAULT 0.00 NOT NULL,
+        budget_used DECIMAL(10,2) DEFAULT 0.00 NOT NULL,
+        budget_currency CHAR(3) DEFAULT 'USD' NOT NULL,
+        budget_notes TEXT NULL,
+        completed_at DATETIME NULL,
         created_by INT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -49,6 +57,7 @@ async function fixEventsTable() {
     console.log('Creating indexes...');
     await conn.query('CREATE INDEX idx_events_organizer_date ON events(created_by, event_date)');
     await conn.query('CREATE INDEX idx_events_status ON events(status)');
+    await conn.query('CREATE INDEX idx_events_visibility ON events(visibility)');
     console.log('✓ Indexes created\n');
 
     console.log('Creating event_registrations table...');

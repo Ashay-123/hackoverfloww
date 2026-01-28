@@ -514,7 +514,26 @@ input:checked + .slider:before {
     flex-direction: column;
   }
 
-  .table-actions .btn {
-    width: 100%;
-  }
+.table-actions .btn {
+  width: 100%;
+}
+}
+
+.export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.card-list .item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.card-list .item-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }

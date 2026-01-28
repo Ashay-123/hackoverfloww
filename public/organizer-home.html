@@ -127,7 +127,7 @@
               </div>
               <div class="stat-item">
                 <span class="stat-value" id="statCompleted">0</span>
-                <span class="stat-label">Closed / Rejected</span>
+                <span class="stat-label">Closed / Rejected / Completed</span>
               </div>
             </div>
             <a href="#events" class="btn btn-ghost">Manage events</a>
@@ -216,6 +216,7 @@
               <option value="published">Published</option>
               <option value="rejected">Rejected</option>
               <option value="closed">Closed</option>
+              <option value="completed">Completed</option>
             </select>
           </div>
           <div id="myEventsList" class="card-list">Loading…</div>
@@ -241,15 +242,38 @@
 
               <div class="form-row">
                 <div class="field">
-                  <label>Date <span class="required">*</span></label>
+                  <label>Start Date <span class="required">*</span></label>
                   <input type="date" id="eDate" required>
                   <span class="field-error" id="eDateError"></span>
                 </div>
+                <div class="field">
+                  <label>End Date (optional)</label>
+                  <input type="date" id="eEndDate">
+                  <span class="field-hint">For multi-day events</span>
+                </div>
+              </div>
+
+              <div class="form-row">
                 <div class="field">
                   <label>Max Participants</label>
                   <input type="number" id="eMaxParticipants" min="0" value="0" placeholder="0 = unlimited">
                   <span class="field-hint">0 means unlimited</span>
                 </div>
+                <div class="field">
+                  <label>Visibility</label>
+                  <select id="eVisibility">
+                    <option value="public">Public</option>
+                    <option value="internal">Internal</option>
+                    <option value="club">Club-only</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="field">
+                <label>Collaborating Clubs</label>
+                <select id="eClubs" multiple></select>
+                <span class="field-hint">Choose clubs you head/coordinate. Required for club-only events.</span>
+                <div id="clubRoleList" class="list-compact"></div>
               </div>
 
               <div class="form-row">
@@ -290,6 +314,28 @@
                 <input type="datetime-local" id="eRegDeadline">
                 <span class="field-hint">Must be before event start</span>
                 <span class="field-error" id="eRegDeadlineError"></span>
+              </div>
+
+              <div class="form-row">
+                <div class="field">
+                  <label>Budget Total</label>
+                  <input type="number" id="eBudgetTotal" min="0" step="0.01" placeholder="0.00">
+                </div>
+                <div class="field">
+                  <label>Budget Used</label>
+                  <input type="number" id="eBudgetUsed" min="0" step="0.01" placeholder="0.00">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="field">
+                  <label>Currency</label>
+                  <input type="text" id="eBudgetCurrency" maxlength="3" placeholder="USD">
+                </div>
+                <div class="field">
+                  <label>Budget Notes</label>
+                  <input type="text" id="eBudgetNotes" placeholder="Optional notes">
+                </div>
               </div>
 
               <div class="form-actions">
@@ -370,9 +416,38 @@
       <section id="messages" class="section">
         <h1 class="section-title">Messages</h1>
         <p class="section-desc">One-to-one and group chats</p>
-        <div class="card">
-          <p class="muted">Messages and threads will appear here. Use club or event chats for collaboration.</p>
-          <div id="messageThreads" class="list-compact">No threads yet.</div>
+        <div class="grid-2 message-layout">
+          <div class="card">
+            <h3>Start a chat</h3>
+            <div class="field">
+              <label>Direct message</label>
+              <input type="text" id="dmSearch" placeholder="Search by name or email">
+              <div id="dmResults" class="list-compact"></div>
+            </div>
+            <div class="field">
+              <label>Club chat</label>
+              <select id="clubChatSelect"></select>
+              <button type="button" id="createClubChat" class="btn btn-ghost">Open club chat</button>
+            </div>
+            <div class="field">
+              <label>Event chat</label>
+              <select id="eventChatSelect"></select>
+              <button type="button" id="createEventChat" class="btn btn-ghost">Open event chat</button>
+            </div>
+          </div>
+          <div class="card message-panel">
+            <div class="message-split">
+              <div class="message-thread-list" id="messageThreads">No threads yet.</div>
+              <div class="message-thread-view">
+                <div id="messageThreadHeader" class="muted">Select a conversation</div>
+                <div id="messageList" class="message-list"></div>
+                <form id="messageSendForm" class="message-send">
+                  <input type="text" id="messageInput" placeholder="Type a message..." required>
+                  <button type="submit" class="btn btn-primary">Send</button>
+                </form>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
