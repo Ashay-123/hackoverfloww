@@ -4,9 +4,6 @@
   const API = '';
   let user = null;
   let currentEventId = null;
-  let clubRoleMap = {};
-  let selectedThreadId = null;
-  let clubOptions = [];
 
   function getUser() {
     if (user) return user;
@@ -235,68 +232,6 @@
     });
   }
 
-  function loadClubOptions() {
-    get('/api/profile/clubs').then(r => {
-      if (!r.success) return;
-      clubOptions = r.headsOrCoords || [];
-      const select = $('eClubs');
-      const chatSelect = $('clubChatSelect');
-      if (select) {
-        select.innerHTML = clubOptions.length
-          ? clubOptions.map(c => `<option value="${c.id}">${escapeHtml(c.name)} (${c.type})</option>`).join('')
-          : '<option value="">No clubs available</option>';
-      }
-      if (chatSelect) {
-        chatSelect.innerHTML = clubOptions.length
-          ? '<option value="">Select club</option>' + clubOptions.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')
-          : '<option value="">No clubs</option>';
-      }
-      renderClubRoles();
-    });
-  }
-
-  function loadEventChatOptions() {
-    const select = $('eventChatSelect');
-    if (!select) return;
-    get('/api/organizer/events').then(r => {
-      const arr = r.events || [];
-      select.innerHTML = arr.length
-        ? '<option value="">Select event</option>' + arr.map(e => `<option value="${e.id}">${escapeHtml(e.title)}</option>`).join('')
-        : '<option value="">No events</option>';
-    });
-  }
-
-  function renderClubRoles() {
-    const list = $('clubRoleList');
-    if (!list) return;
-    const selectedIds = Array.from($('eClubs')?.selectedOptions || []).map(o => parseInt(o.value, 10)).filter(Boolean);
-    if (!selectedIds.length) {
-      list.innerHTML = '<span class="empty">No collaborating clubs selected.</span>';
-      return;
-    }
-    list.innerHTML = selectedIds.map(id => {
-      const club = clubOptions.find(c => c.id === id);
-      const currentRole = clubRoleMap[id] || 'host';
-      return `<div class="item-row" style="align-items:center;">
-        <div><strong>${escapeHtml(club?.name || 'Club')}</strong></div>
-        <div>
-          <select data-club-role="${id}" class="filter-select">
-            <option value="host" ${currentRole === 'host' ? 'selected' : ''}>Host</option>
-            <option value="co-host" ${currentRole === 'co-host' ? 'selected' : ''}>Co-host</option>
-            <option value="partner" ${currentRole === 'partner' ? 'selected' : ''}>Partner</option>
-          </select>
-        </div>
-      </div>`;
-    }).join('');
-
-    list.querySelectorAll('[data-club-role]').forEach(sel => {
-      sel.addEventListener('change', function () {
-        const cid = parseInt(this.dataset.clubRole, 10);
-        clubRoleMap[cid] = this.value;
-      });
-    });
-  }
-
   // ---------- Dashboard: My clubs ----------
   function loadMyClubsDashboard() {
     get('/api/profile/clubs').then(r => {
@@ -319,10 +254,9 @@
     if (!el) return;
     el.innerHTML = '<p class="muted">Loading events...</p>';
     
-    get('/api/organizer/events').then(r => {
-      allEvents = Array.isArray(r.events) ? r.events : [];
+    get('/api/organizer/events').then(events => {
+      allEvents = Array.isArray(events) ? events : [];
       renderEvents();
-      loadEventChatOptions();
     }).catch(err => {
       console.error('Error loading events:', err);
       showMessage('Failed to load events. Please refresh.', 'error');
@@ -346,9 +280,7 @@
     }
     
     el.innerHTML = filtered.map(e => {
-      const date = e.end_date && e.end_date !== e.event_date
-        ? `${formatDate(e.event_date)} - ${formatDate(e.end_date)}`
-        : formatDate(e.event_date);
+      const date = formatDate(e.event_date);
       const timeRange = e.start_time && e.end_time ? `${e.start_time} - ${e.end_time}` : '';
       const location = e.location || e.online_link || 'TBD';
       const locationType = e.location ? '📍 In-person' : '🌐 Online';
@@ -367,10 +299,6 @@
       }
       if (status === 'published') {
         actions.push(`<button type="button" class="btn btn-sm btn-secondary" data-close="${e.id}">Close</button>`);
-        actions.push(`<button type="button" class="btn btn-sm btn-ghost" data-complete="${e.id}">Complete</button>`);
-      }
-      if (status === 'closed') {
-        actions.push(`<button type="button" class="btn btn-sm btn-ghost" data-complete="${e.id}">Complete</button>`);
       }
       actions.push(`<button type="button" class="btn btn-sm btn-ghost" data-duplicate="${e.id}">Duplicate</button>`);
       
@@ -387,8 +315,6 @@
             <div><strong>Mode:</strong> ${locationType}</div>
             <div><strong>Location:</strong> ${escapeHtml(location)}</div>
             <div><strong>Max Participants:</strong> ${maxParts}</div>
-            <div><strong>Visibility:</strong> ${escapeHtml(e.visibility || 'public')}</div>
-            <div><strong>Budget:</strong> ${e.budget_used || 0} / ${e.budget_total || 0} ${escapeHtml(e.budget_currency || '')}</div>
             ${e.registration_deadline ? `<div><strong>Reg. Deadline:</strong> ${formatDateTime(e.registration_deadline)}</div>` : ''}
           </div>
         </div>
@@ -409,9 +335,6 @@
     el.querySelectorAll('[data-close]').forEach(btn => {
       btn.addEventListener('click', () => closeEvent(parseInt(btn.dataset.close, 10)));
     });
-    el.querySelectorAll('[data-complete]').forEach(btn => {
-      btn.addEventListener('click', () => completeEvent(parseInt(btn.dataset.complete, 10)));
-    });
     el.querySelectorAll('[data-duplicate]').forEach(btn => {
       btn.addEventListener('click', () => duplicateEvent(parseInt(btn.dataset.duplicate, 10)));
     });
@@ -420,9 +343,9 @@
   $('statusFilter')?.addEventListener('change', renderEvents);
 
   function loadEventsStats() {
-    get('/api/organizer/events').then(r => {
-      const arr = Array.isArray(r.events) ? r.events : [];
-      const stats = { draft: 0, pending_approval: 0, published: 0, closed: 0, rejected: 0, completed: 0 };
+    get('/api/organizer/events').then(events => {
+      const arr = Array.isArray(events) ? events : [];
+      const stats = { draft: 0, pending_approval: 0, published: 0, closed: 0, rejected: 0 };
       arr.forEach(e => {
         const s = e.status || 'draft';
         if (stats[s] !== undefined) stats[s]++;
@@ -430,7 +353,7 @@
       if ($('statDraft')) $('statDraft').textContent = stats.draft;
       if ($('statPending')) $('statPending').textContent = stats.pending_approval;
       if ($('statApproved')) $('statApproved').textContent = stats.published;
-      if ($('statCompleted')) $('statCompleted').textContent = stats.closed + stats.rejected + stats.completed;
+      if ($('statCompleted')) $('statCompleted').textContent = stats.closed + stats.rejected;
     });
   }
 
@@ -444,10 +367,6 @@
     $('publishBtn').style.display = 'inline-flex';
     currentMode = 'inperson';
     updateModeFields();
-    $('eVisibility').value = 'public';
-    if ($('eClubs')) Array.from($('eClubs').options || []).forEach(o => { o.selected = false; });
-    clubRoleMap = {};
-    renderClubRoles();
     clearErrors();
   }
 
@@ -478,8 +397,6 @@
     });
   });
 
-  $('eClubs')?.addEventListener('change', renderClubRoles);
-
   function validateEventForm() {
     clearErrors();
     let valid = true;
@@ -497,13 +414,6 @@
     if (!$('eDate').value) {
       showFieldError('eDate', 'Date is required');
       valid = false;
-    }
-
-    if ($('eEndDate').value && $('eDate').value) {
-      if ($('eEndDate').value < $('eDate').value) {
-        showFieldError('eDate', 'End date must be on/after start date');
-        valid = false;
-      }
     }
     
     if (!$('eStartTime').value) {
@@ -530,21 +440,6 @@
     
     if (currentMode === 'online' && !$('eOnlineLink').value.trim()) {
       showFieldError('eOnlineLink', 'Online link is required for online events');
-      valid = false;
-    }
-
-    if ($('eVisibility').value === 'club') {
-      const selected = Array.from($('eClubs').selectedOptions || []);
-      if (!selected.length) {
-        showMessage('Select at least one club for club-only visibility', 'error');
-        valid = false;
-      }
-    }
-
-    const budgetTotal = parseFloat($('eBudgetTotal').value || '0');
-    const budgetUsed = parseFloat($('eBudgetUsed').value || '0');
-    if (budgetUsed > budgetTotal) {
-      showMessage('Budget used cannot exceed budget total', 'error');
       valid = false;
     }
     
@@ -575,7 +470,7 @@
       el.textContent = '';
       el.style.display = 'none';
     });
-    qsa('input, textarea, select').forEach(el => el.classList.remove('error'));
+    qsa('input, textarea').forEach(el => el.classList.remove('error'));
   }
 
   function showMessage(msg, type = 'success') {
@@ -606,26 +501,13 @@
       title: $('eTitle').value.trim(),
       description: $('eDescription').value.trim(),
       event_date: $('eDate').value,
-      end_date: $('eEndDate').value || null,
       start_time: $('eStartTime').value,
       end_time: $('eEndTime').value,
       location: currentMode === 'inperson' ? $('eLocation').value.trim() : null,
       online_link: currentMode === 'online' ? $('eOnlineLink').value.trim() : null,
       max_participants: parseInt($('eMaxParticipants').value, 10) || 0,
-      registration_deadline: regDeadline,
-      visibility: $('eVisibility').value,
-      budget_total: $('eBudgetTotal').value || 0,
-      budget_used: $('eBudgetUsed').value || 0,
-      budget_currency: $('eBudgetCurrency').value.trim() || 'USD',
-      budget_notes: $('eBudgetNotes').value.trim()
+      registration_deadline: regDeadline
     };
-    const clubIds = Array.from($('eClubs')?.selectedOptions || []).map(o => parseInt(o.value, 10)).filter(Boolean);
-    if (clubIds.length) {
-      const clubRoles = {};
-      clubIds.forEach(id => { clubRoles[id] = clubRoleMap[id] || 'host'; });
-      data.clubIds = clubIds;
-      data.clubRoles = clubRoles;
-    }
     
     const btn = $('saveDraftBtn');
     btn.disabled = true;
@@ -642,7 +524,6 @@
         resetEventForm();
         loadMyEvents();
         loadEventsStats();
-        loadEventChatOptions();
         const tabs = this.closest('.section').querySelectorAll('.tab');
         tabs.forEach(t => { if (t.dataset.tab === 'myevents') t.click(); });
       }
@@ -671,27 +552,14 @@
       title: $('eTitle').value.trim(),
       description: $('eDescription').value.trim(),
       event_date: $('eDate').value,
-      end_date: $('eEndDate').value || null,
       start_time: $('eStartTime').value,
       end_time: $('eEndTime').value,
       location: currentMode === 'inperson' ? $('eLocation').value.trim() : null,
       online_link: currentMode === 'online' ? $('eOnlineLink').value.trim() : null,
       max_participants: parseInt($('eMaxParticipants').value, 10) || 0,
       registration_deadline: regDeadline,
-      status: 'published',
-      visibility: $('eVisibility').value,
-      budget_total: $('eBudgetTotal').value || 0,
-      budget_used: $('eBudgetUsed').value || 0,
-      budget_currency: $('eBudgetCurrency').value.trim() || 'USD',
-      budget_notes: $('eBudgetNotes').value.trim()
+      status: 'published'
     };
-    const clubIds = Array.from($('eClubs')?.selectedOptions || []).map(o => parseInt(o.value, 10)).filter(Boolean);
-    if (clubIds.length) {
-      const clubRoles = {};
-      clubIds.forEach(id => { clubRoles[id] = clubRoleMap[id] || 'host'; });
-      data.clubIds = clubIds;
-      data.clubRoles = clubRoles;
-    }
     
     const btn = this;
     btn.disabled = true;
@@ -708,7 +576,6 @@
         resetEventForm();
         loadMyEvents();
         loadEventsStats();
-        loadEventChatOptions();
         const tabs = this.closest('.section').querySelectorAll('.tab');
         tabs.forEach(t => { if (t.dataset.tab === 'myevents') t.click(); });
       }
@@ -740,16 +607,10 @@
     $('eTitle').value = event.title || '';
     $('eDescription').value = event.description || '';
     $('eDate').value = event.event_date || '';
-    $('eEndDate').value = event.end_date || '';
     $('eStartTime').value = event.start_time || '';
     $('eEndTime').value = event.end_time || '';
     $('eMaxParticipants').value = event.max_participants || 0;
     $('eRegDeadline').value = toDateTimeLocalValue(event.registration_deadline);
-    $('eVisibility').value = event.visibility || 'public';
-    $('eBudgetTotal').value = event.budget_total || 0;
-    $('eBudgetUsed').value = event.budget_used || 0;
-    $('eBudgetCurrency').value = event.budget_currency || 'USD';
-    $('eBudgetNotes').value = event.budget_notes || '';
     
     if (event.location) {
       currentMode = 'inperson';
@@ -765,17 +626,6 @@
       });
     }
     updateModeFields();
-
-    get('/api/events/' + event.id + '/clubs').then(r => {
-      if (!r.success) return;
-      const ids = (r.clubs || []).map(c => c.club_id);
-      Array.from($('eClubs')?.options || []).forEach(opt => {
-        opt.selected = ids.includes(parseInt(opt.value, 10));
-      });
-      clubRoleMap = {};
-      (r.clubs || []).forEach(c => { clubRoleMap[c.club_id] = c.role || 'host'; });
-      renderClubRoles();
-    });
     
     // Switch to create tab
     const createTab = document.querySelector('.tab[data-tab="create"]');
@@ -831,22 +681,6 @@
     });
   }
 
-  function completeEvent(id) {
-    if (!confirm('Mark this event as completed?')) return;
-    post(`/api/events/${id}/complete`).then(r => {
-      if (r.error) {
-        showMessage(r.error, 'error');
-      } else {
-        showMessage(r.message || 'Event completed', 'success');
-        loadMyEvents();
-        loadEventsStats();
-      }
-    }).catch(err => {
-      console.error('Error completing event:', err);
-      showMessage('Failed to complete event', 'error');
-    });
-  }
-
   function duplicateEvent(id) {
     const event = allEvents.find(e => e.id === id);
     if (!event) {
@@ -858,15 +692,9 @@
     $('eTitle').value = event.title + ' (Copy)';
     $('eDescription').value = event.description || '';
     $('eDate').value = event.event_date || '';
-    $('eEndDate').value = event.end_date || '';
     $('eStartTime').value = event.start_time || '';
     $('eEndTime').value = event.end_time || '';
     $('eMaxParticipants').value = event.max_participants || 0;
-    $('eVisibility').value = event.visibility || 'public';
-    $('eBudgetTotal').value = event.budget_total || 0;
-    $('eBudgetUsed').value = event.budget_used || 0;
-    $('eBudgetCurrency').value = event.budget_currency || 'USD';
-    $('eBudgetNotes').value = event.budget_notes || '';
     
     if (event.location) {
       currentMode = 'inperson';
@@ -882,17 +710,6 @@
       });
     }
     updateModeFields();
-
-    get('/api/events/' + event.id + '/clubs').then(r => {
-      if (!r.success) return;
-      const ids = (r.clubs || []).map(c => c.club_id);
-      Array.from($('eClubs')?.options || []).forEach(opt => {
-        opt.selected = ids.includes(parseInt(opt.value, 10));
-      });
-      clubRoleMap = {};
-      (r.clubs || []).forEach(c => { clubRoleMap[c.club_id] = c.role || 'host'; });
-      renderClubRoles();
-    });
     
     const createTab = document.querySelector('.tab[data-tab="create"]');
     if (createTab) createTab.click();
@@ -973,24 +790,8 @@
       const arr = r.bookings || [];
       el.innerHTML = arr.length ? arr.map(b => {
         const start = formatDateTime(b.start_datetime);
-        const canCancel = b.status === 'pending' || b.status === 'approved';
-        return `<div class="item-row" data-booking-row="${b.id}">
-          <div>
-            <h4>${escapeHtml(b.resource_name)}</h4>
-            <p class="meta">${start} <span class="status ${b.status || 'pending'}">${b.status || 'pending'}</span></p>
-          </div>
-          ${canCancel ? `<button type="button" class="btn btn-ghost" data-booking-cancel="${b.id}">Cancel</button>` : ''}
-        </div>`;
+        return '<div class="item-row"><div><h4>' + escapeHtml(b.resource_name) + '</h4><p class="meta">' + start + ' <span class="status ' + (b.status || 'pending') + '">' + (b.status || 'pending') + '</span></p></div></div>';
       }).join('') : '<p class="muted">No bookings.</p>';
-      el.querySelectorAll('[data-booking-cancel]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          if (!confirm('Cancel this booking?')) return;
-          put(`/api/resources/bookings/${btn.dataset.bookingCancel}/cancel`, {}).then(r2 => {
-            if (r2.success) { loadBookings(); loadMyBookingsDashboard(); }
-            else alert(r2.message || 'Failed.');
-          });
-        });
-      });
     });
   }
 
@@ -1079,121 +880,16 @@
   }
 
   // ---------- Messages ----------
-  let threadsCache = [];
   function loadMessageThreads() {
     const el = $('messageThreads');
     if (!el) return;
     get('/api/messages/threads').then(r => {
-      threadsCache = r.threads || [];
-      renderThreadList();
+      const arr = r.threads || [];
+      el.innerHTML = arr.length ? '<ul class="list">' + arr.map(t =>
+        '<li>Thread #' + t.id + ' (' + (t.type || 'direct') + ')</li>'
+      ).join('') + '</ul>' : 'No threads yet.';
     }).catch(() => { el.innerHTML = 'Could not load.'; });
   }
-
-  function renderThreadList() {
-    const el = $('messageThreads');
-    if (!el) return;
-    if (!threadsCache.length) {
-      el.innerHTML = '<span class="empty">No threads yet.</span>';
-      return;
-    }
-    el.innerHTML = threadsCache.map(t => `
-      <div class="message-thread-item ${selectedThreadId === t.id ? 'active' : ''}" data-thread-id="${t.id}">
-        <strong>${escapeHtml(t.title || `#${t.id} ${t.type}`)}</strong>
-        <div class="meta">${escapeHtml(t.last_message || 'No messages yet')}</div>
-      </div>
-    `).join('');
-    el.querySelectorAll('[data-thread-id]').forEach(btn => {
-      btn.addEventListener('click', () => openThread(parseInt(btn.dataset.threadId, 10)));
-    });
-  }
-
-  function openThread(threadId) {
-    selectedThreadId = threadId;
-    renderThreadList();
-    $('messageThreadHeader').textContent = 'Loading...';
-    get(`/api/messages/threads/${threadId}`).then(r => {
-      if (!r.success) return;
-      $('messageThreadHeader').textContent = r.thread.title || `Thread #${r.thread.id}`;
-    });
-    get(`/api/messages/threads/${threadId}/messages`).then(r => {
-      if (!r.success) return;
-      renderMessages(r.messages || []);
-    });
-  }
-
-  function renderMessages(messages) {
-    const el = $('messageList');
-    if (!el) return;
-    if (!messages.length) {
-      el.innerHTML = '<p class="muted">No messages yet.</p>';
-      return;
-    }
-    el.innerHTML = messages.map(m => `
-      <div class="message-bubble ${m.sender_id === user.id ? 'me' : ''}">
-        <div><strong>${escapeHtml(m.full_name || m.email)}</strong></div>
-        <div>${escapeHtml(m.body)}</div>
-        <div class="meta">${formatDateTime(m.created_at)}</div>
-      </div>
-    `).join('');
-    el.scrollTop = el.scrollHeight;
-  }
-
-  $('messageSendForm')?.addEventListener('submit', function (e) {
-    e.preventDefault();
-    if (!selectedThreadId) return alert('Select a thread first.');
-    const body = $('messageInput').value.trim();
-    if (!body) return;
-    post(`/api/messages/threads/${selectedThreadId}/messages`, { body }).then(r => {
-      if (!r.success) return alert(r.message || 'Failed to send');
-      $('messageInput').value = '';
-      openThread(selectedThreadId);
-      loadMessageThreads();
-    });
-  });
-
-  $('dmSearch')?.addEventListener('input', debounce(function () {
-    const q = $('dmSearch').value.trim();
-    const results = $('dmResults');
-    if (!q) { results.innerHTML = ''; return; }
-    get('/api/users/search?q=' + encodeURIComponent(q)).then(r => {
-      const arr = r.users || [];
-      results.innerHTML = arr.length ? arr.map(u =>
-        `<div class="item-row"><div><strong>${escapeHtml(u.full_name || u.email)}</strong><span class="muted"> • ${escapeHtml(u.email || '')}</span></div>
-         <button type="button" class="btn btn-ghost" data-dm-user="${u.id}">Start</button></div>`
-      ).join('') : '<span class="empty">No users found.</span>';
-      results.querySelectorAll('[data-dm-user]').forEach(btn => {
-        btn.addEventListener('click', () => createDirectThread(parseInt(btn.dataset.dmUser, 10)));
-      });
-    });
-  }, 400));
-
-  function createDirectThread(userId) {
-    post('/api/messages/threads', { type: 'direct', userId }).then(r => {
-      if (!r.success) return alert(r.message || 'Failed to create thread');
-      loadMessageThreads();
-      openThread(r.threadId);
-    });
-  }
-
-  $('createClubChat')?.addEventListener('click', () => {
-    const clubId = $('clubChatSelect').value;
-    if (!clubId) return alert('Select a club');
-    post('/api/messages/threads', { type: 'club', clubId }).then(r => {
-      if (!r.success) return alert(r.message || 'Failed');
-      loadMessageThreads();
-      openThread(r.threadId);
-    });
-  });
-
-  $('createEventChat')?.addEventListener('click', () => {
-    const eventId = $('eventChatSelect').value;
-    if (!eventId) return alert('Select an event');
-    post('/api/messages/threads', { type: 'event', eventId }).then(r => {
-      if (!r.success) return alert(r.message || 'Failed');
-      loadMessageThreads();
-      openThread(r.threadId);
-    });
-  });
 
   // ---------- Helpers ----------
   function escapeHtml(s) {
@@ -1227,14 +923,6 @@
     } catch (_) { return s; }
   }
 
-  function debounce(fn, delay) {
-    let timeout;
-    return function (...args) {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => fn.apply(this, args), delay);
-    };
-  }
-
   // ---------- Init ----------
   function init() {
     const u = getUser();
@@ -1253,8 +941,6 @@
     loadBookings();
     loadResourceOptions();
     loadMyClubs();
-    loadClubOptions();
-    loadEventChatOptions();
   }
 
   init();

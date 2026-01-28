@@ -4,8 +4,6 @@
   const API = '';
   let currentUserId = null;
   let currentEventId = null;
-  let currentResourceId = null;
-  let currentClubId = null;
   let currentPage = 1;
   let frozenRegistrations = false;
 
@@ -126,10 +124,6 @@
   function onHash() {
     const h = (window.location.hash || '#dashboard').slice(1);
     setSection(h || 'dashboard');
-    if (h === 'resources') loadResources();
-    if (h === 'bookings') loadBookings();
-    if (h === 'clubs') loadClubs();
-    if (h === 'analytics') loadAnalytics();
     const sidebar = $('sidebar');
     if (sidebar && sidebar.classList.contains('open')) {
       sidebar.classList.remove('open');
@@ -381,9 +375,6 @@
       return;
     }
     el.innerHTML = events.map(e => {
-      const dateRange = e.end_date && e.end_date !== e.event_date
-        ? `${formatDate(e.event_date)} - ${formatDate(e.end_date)}`
-        : formatDate(e.event_date);
       const actions = [];
       if (e.status === 'pending_approval') {
         actions.push(`<button type="button" class="btn btn-primary" data-approve="${e.id}">Approve</button>`);
@@ -403,10 +394,8 @@
         <p class="muted">${escapeHtml(e.description || '')}</p>
         <div class="event-card-meta">
           <div><strong>Organizer:</strong> ${escapeHtml(e.organizer_name || e.organizer_email)}</div>
-          <div><strong>Date:</strong> ${dateRange} ${e.start_time} - ${e.end_time}</div>
+          <div><strong>Date:</strong> ${formatDate(e.event_date)} ${e.start_time} - ${e.end_time}</div>
           <div><strong>Location:</strong> ${escapeHtml(e.location || e.online_link || 'TBD')}</div>
-          <div><strong>Visibility:</strong> ${escapeHtml(e.visibility || 'public')}</div>
-          <div><strong>Budget:</strong> ${e.budget_used || 0} / ${e.budget_total || 0} ${escapeHtml(e.budget_currency || '')}</div>
         </div>
         <div class="event-card-actions">${actions.join('')}</div>
       </div>`;
@@ -478,20 +467,15 @@
   function viewEvent(id, events) {
     const event = events.find(e => e.id === id);
     if (!event) return;
-    const dateRange = event.end_date && event.end_date !== event.event_date
-      ? `${formatDate(event.event_date)} - ${formatDate(event.end_date)}`
-      : formatDate(event.event_date);
     $('eventModalTitle').textContent = event.title;
     $('eventModalBody').innerHTML = `
       <div class="event-card-meta">
         <div><strong>Status:</strong> <span class="status ${event.status}">${event.status}</span></div>
         <div><strong>Organizer:</strong> ${escapeHtml(event.organizer_name || event.organizer_email)}</div>
-        <div><strong>Date:</strong> ${dateRange}</div>
+        <div><strong>Date:</strong> ${formatDate(event.event_date)}</div>
         <div><strong>Time:</strong> ${event.start_time} - ${event.end_time}</div>
         <div><strong>Location:</strong> ${escapeHtml(event.location || event.online_link || 'TBD')}</div>
-        <div><strong>Visibility:</strong> ${escapeHtml(event.visibility || 'public')}</div>
         <div><strong>Max Participants:</strong> ${event.max_participants === 0 ? 'Unlimited' : event.max_participants}</div>
-        <div><strong>Budget:</strong> ${event.budget_used || 0} / ${event.budget_total || 0} ${escapeHtml(event.budget_currency || '')}</div>
       </div>
       <p class="muted" style="margin-top: 16px;">${escapeHtml(event.description || '')}</p>
       ${event.rejection_reason ? '<p class="muted" style="color: var(--error);"><strong>Rejection Reason:</strong> ' + escapeHtml(event.rejection_reason) + '</p>' : ''}
@@ -502,411 +486,6 @@
   $('refreshEvents')?.addEventListener('click', loadEvents);
   $('eventSearch')?.addEventListener('input', debounce(loadEvents, 500));
   $('eventStatusFilter')?.addEventListener('change', loadEvents);
-
-  // ===== Resource Management =====
-  async function loadResources() {
-    const list = $('resourcesListAdmin');
-    if (list) list.innerHTML = '<p class="muted">Loading resources...</p>';
-    try {
-      const res = await get('/api/admin/resources');
-      if (!res.success) throw new Error(res.message || 'Failed');
-      renderResources(res.resources || []);
-    } catch (e) {
-      if (list) list.innerHTML = '<p class="muted">Could not load resources.</p>';
-      console.error('Error loading resources:', e);
-    }
-  }
-
-  function renderResources(resources) {
-    const list = $('resourcesListAdmin');
-    if (!list) return;
-    if (!resources.length) {
-      list.innerHTML = '<p class="muted">No resources found.</p>';
-      return;
-    }
-    list.innerHTML = resources.map(r => `
-      <div class="item-row" data-resource-row="${r.id}">
-        <div>
-          <h4>${escapeHtml(r.name)}</h4>
-          <p class="meta">${escapeHtml(r.category)} ${r.requires_approval ? '• approval required' : '• auto-approved'}</p>
-        </div>
-        <div class="item-actions">
-          <button type="button" class="btn btn-ghost" data-resource-edit="${r.id}">Edit</button>
-          <button type="button" class="btn btn-danger" data-resource-delete="${r.id}">Delete</button>
-        </div>
-      </div>
-    `).join('');
-
-    list.querySelectorAll('[data-resource-edit]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const r = resources.find(x => x.id === parseInt(btn.dataset.resourceEdit, 10));
-        if (!r) return;
-        currentResourceId = r.id;
-        $('resourceId').value = r.id;
-        $('resourceName').value = r.name || '';
-        $('resourceCategory').value = r.category || 'room';
-        $('resourceDescription').value = r.description || '';
-        $('resourceTypeId').value = r.type_id || '';
-        $('resourceRequiresApproval').checked = !!r.requires_approval;
-      });
-    });
-    list.querySelectorAll('[data-resource-delete]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        if (!confirm('Delete this resource?')) return;
-        try {
-          await del(`/api/admin/resources/${btn.dataset.resourceDelete}`);
-          showMessage($('resourceMessage'), 'Resource deleted');
-          loadResources();
-        } catch (e) {
-          showMessage($('resourceMessage'), 'Failed to delete resource', 'error');
-        }
-      });
-    });
-  }
-
-  $('resourceForm')?.addEventListener('submit', async function (e) {
-    e.preventDefault();
-    const body = {
-      name: $('resourceName').value.trim(),
-      category: $('resourceCategory').value,
-      description: $('resourceDescription').value.trim(),
-      type_id: $('resourceTypeId').value ? parseInt($('resourceTypeId').value, 10) : null,
-      requires_approval: $('resourceRequiresApproval').checked
-    };
-    try {
-      if (currentResourceId) {
-        await put(`/api/admin/resources/${currentResourceId}`, body);
-        showMessage($('resourceMessage'), 'Resource updated');
-      } else {
-        await post('/api/admin/resources', body);
-        showMessage($('resourceMessage'), 'Resource created');
-      }
-      this.reset();
-      currentResourceId = null;
-      $('resourceId').value = '';
-      loadResources();
-    } catch (e) {
-      showMessage($('resourceMessage'), 'Failed to save resource', 'error');
-    }
-  });
-
-  $('resourceReset')?.addEventListener('click', function () {
-    currentResourceId = null;
-    $('resourceForm')?.reset();
-    $('resourceId').value = '';
-  });
-
-  // ===== Booking Approvals =====
-  async function loadBookings() {
-    const list = $('bookingList');
-    if (list) list.innerHTML = '<p class="muted">Loading bookings...</p>';
-    const params = new URLSearchParams();
-    const q = $('bookingSearch')?.value.trim();
-    const status = $('bookingStatusFilter')?.value;
-    if (q) params.append('q', q);
-    if (status) params.append('status', status);
-    try {
-      const res = await get('/api/admin/resource-bookings?' + params.toString());
-      if (!res.success) throw new Error(res.message || 'Failed');
-      renderBookings(res.bookings || []);
-    } catch (e) {
-      if (list) list.innerHTML = '<p class="muted">Could not load bookings.</p>';
-      console.error('Error loading bookings:', e);
-    }
-  }
-
-  function renderBookings(bookings) {
-    const list = $('bookingList');
-    if (!list) return;
-    if (!bookings.length) {
-      list.innerHTML = '<p class="muted">No bookings found.</p>';
-      return;
-    }
-    list.innerHTML = bookings.map(b => {
-      const actions = [];
-      if (b.status === 'pending') {
-        actions.push(`<button type="button" class="btn btn-primary" data-booking-approve="${b.id}">Approve</button>`);
-        actions.push(`<button type="button" class="btn btn-danger" data-booking-reject="${b.id}">Reject</button>`);
-      }
-      if (b.status === 'approved') {
-        actions.push(`<button type="button" class="btn btn-ghost" data-booking-complete="${b.id}">Complete</button>`);
-        actions.push(`<button type="button" class="btn btn-danger" data-booking-cancel="${b.id}">Cancel</button>`);
-      }
-      return `<div class="item-row">
-        <div>
-          <h4>${escapeHtml(b.resource_name)} <span class="status ${b.status}">${b.status}</span></h4>
-          <p class="meta">${escapeHtml(b.full_name || b.email || '')} • ${formatDateTime(b.start_datetime)} → ${formatDateTime(b.end_datetime)}</p>
-        </div>
-        <div class="item-actions">${actions.join('')}</div>
-      </div>`;
-    }).join('');
-
-    list.querySelectorAll('[data-booking-approve]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        try {
-          await put(`/api/admin/resource-bookings/${btn.dataset.bookingApprove}/approve`, {});
-          showMessage($('bookingMessage'), 'Booking approved');
-          loadBookings();
-        } catch (e) {
-          showMessage($('bookingMessage'), 'Failed to approve booking', 'error');
-        }
-      });
-    });
-    list.querySelectorAll('[data-booking-reject]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const reason = prompt('Rejection reason (optional):');
-        try {
-          await put(`/api/admin/resource-bookings/${btn.dataset.bookingReject}/reject`, { reason });
-          showMessage($('bookingMessage'), 'Booking rejected');
-          loadBookings();
-        } catch (e) {
-          showMessage($('bookingMessage'), 'Failed to reject booking', 'error');
-        }
-      });
-    });
-    list.querySelectorAll('[data-booking-cancel]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        if (!confirm('Cancel this booking?')) return;
-        try {
-          await put(`/api/admin/resource-bookings/${btn.dataset.bookingCancel}/cancel`, {});
-          showMessage($('bookingMessage'), 'Booking cancelled');
-          loadBookings();
-        } catch (e) {
-          showMessage($('bookingMessage'), 'Failed to cancel booking', 'error');
-        }
-      });
-    });
-    list.querySelectorAll('[data-booking-complete]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        try {
-          await put(`/api/admin/resource-bookings/${btn.dataset.bookingComplete}/complete`, {});
-          showMessage($('bookingMessage'), 'Booking completed');
-          loadBookings();
-        } catch (e) {
-          showMessage($('bookingMessage'), 'Failed to complete booking', 'error');
-        }
-      });
-    });
-  }
-
-  $('refreshBookings')?.addEventListener('click', loadBookings);
-  $('bookingSearch')?.addEventListener('input', debounce(loadBookings, 500));
-  $('bookingStatusFilter')?.addEventListener('change', loadBookings);
-
-  // ===== Clubs =====
-  async function loadClubs() {
-    const list = $('clubsListAdmin');
-    if (list) list.innerHTML = '<p class="muted">Loading clubs...</p>';
-    try {
-      const res = await get('/api/admin/clubs');
-      if (!res.success) throw new Error(res.message || 'Failed');
-      renderClubs(res.clubs || []);
-    } catch (e) {
-      if (list) list.innerHTML = '<p class="muted">Could not load clubs.</p>';
-      console.error('Error loading clubs:', e);
-    }
-  }
-
-  function renderClubs(clubs) {
-    const list = $('clubsListAdmin');
-    if (!list) return;
-    if (!clubs.length) {
-      list.innerHTML = '<p class="muted">No clubs found.</p>';
-      return;
-    }
-    list.innerHTML = clubs.map(c => `
-      <div class="item-row" data-club-row="${c.id}">
-        <div>
-          <h4>${escapeHtml(c.name)} <span class="muted">(${c.type})</span></h4>
-          <p class="meta">${escapeHtml(c.slug)} • ${c.member_count || 0} members</p>
-        </div>
-        <div class="item-actions">
-          <button type="button" class="btn btn-ghost" data-club-members="${c.id}">Members</button>
-          <button type="button" class="btn btn-ghost" data-club-edit="${c.id}">Edit</button>
-          <button type="button" class="btn btn-danger" data-club-delete="${c.id}">Delete</button>
-        </div>
-      </div>
-    `).join('');
-
-    list.querySelectorAll('[data-club-edit]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const c = clubs.find(x => x.id === parseInt(btn.dataset.clubEdit, 10));
-        if (!c) return;
-        currentClubId = c.id;
-        $('clubId').value = c.id;
-        $('clubName').value = c.name || '';
-        $('clubSlug').value = c.slug || '';
-        $('clubType').value = c.type || 'club';
-        $('clubDescription').value = c.description || '';
-        $('clubLogo').value = c.logo_url || '';
-      });
-    });
-    list.querySelectorAll('[data-club-delete]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        if (!confirm('Delete this club?')) return;
-        try {
-          await del(`/api/admin/clubs/${btn.dataset.clubDelete}`);
-          showMessage($('clubMessage'), 'Club deleted');
-          loadClubs();
-        } catch (e) {
-          showMessage($('clubMessage'), 'Failed to delete club', 'error');
-        }
-      });
-    });
-    list.querySelectorAll('[data-club-members]').forEach(btn => {
-      btn.addEventListener('click', () => openClubMembers(parseInt(btn.dataset.clubMembers, 10)));
-    });
-  }
-
-  $('clubForm')?.addEventListener('submit', async function (e) {
-    e.preventDefault();
-    const body = {
-      name: $('clubName').value.trim(),
-      slug: $('clubSlug').value.trim(),
-      type: $('clubType').value,
-      description: $('clubDescription').value.trim(),
-      logo_url: $('clubLogo').value.trim()
-    };
-    try {
-      if (currentClubId) {
-        await put(`/api/admin/clubs/${currentClubId}`, body);
-        showMessage($('clubMessage'), 'Club updated');
-      } else {
-        await post('/api/admin/clubs', body);
-        showMessage($('clubMessage'), 'Club created');
-      }
-      this.reset();
-      currentClubId = null;
-      $('clubId').value = '';
-      loadClubs();
-    } catch (e) {
-      showMessage($('clubMessage'), 'Failed to save club', 'error');
-    }
-  });
-
-  $('clubReset')?.addEventListener('click', function () {
-    currentClubId = null;
-    $('clubForm')?.reset();
-    $('clubId').value = '';
-  });
-
-  async function openClubMembers(clubId) {
-    currentClubId = clubId;
-    $('clubMembersTitle').textContent = `Club Members (#${clubId})`;
-    showModal('clubMembersModal');
-    await loadClubMembers(clubId);
-  }
-
-  async function loadClubMembers(clubId) {
-    const list = $('clubMembersList');
-    if (list) list.innerHTML = '<p class="muted">Loading members...</p>';
-    try {
-      const res = await get(`/api/admin/clubs/${clubId}/members`);
-      if (!res.success) throw new Error(res.message || 'Failed');
-      list.innerHTML = res.members.length ? res.members.map(m => `
-        <div class="item-row">
-          <div>
-            <strong>${escapeHtml(m.full_name || m.email)}</strong>
-            <span class="muted">• ${escapeHtml(m.role)}</span>
-          </div>
-          <div class="item-actions">
-            <select data-member-role="${m.user_id}" class="filter-select">
-              <option value="member" ${m.role === 'member' ? 'selected' : ''}>Member</option>
-              <option value="coordinator" ${m.role === 'coordinator' ? 'selected' : ''}>Coordinator</option>
-              <option value="head" ${m.role === 'head' ? 'selected' : ''}>Head</option>
-            </select>
-            <button type="button" class="btn btn-danger" data-member-remove="${m.user_id}">Remove</button>
-          </div>
-        </div>
-      `).join('') : '<p class="muted">No members.</p>';
-
-      list.querySelectorAll('[data-member-role]').forEach(sel => {
-        sel.addEventListener('change', async () => {
-          try {
-            await put(`/api/admin/clubs/${clubId}/members/${sel.dataset.memberRole}`, { role: sel.value });
-            showMessage($('clubMessage'), 'Member role updated');
-          } catch (e) {
-            showMessage($('clubMessage'), 'Failed to update role', 'error');
-          }
-        });
-      });
-      list.querySelectorAll('[data-member-remove]').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          if (!confirm('Remove this member?')) return;
-          try {
-            await del(`/api/admin/clubs/${clubId}/members/${btn.dataset.memberRemove}`);
-            showMessage($('clubMessage'), 'Member removed');
-            loadClubMembers(clubId);
-          } catch (e) {
-            showMessage($('clubMessage'), 'Failed to remove member', 'error');
-          }
-        });
-      });
-    } catch (e) {
-      list.innerHTML = '<p class="muted">Could not load members.</p>';
-    }
-  }
-
-  $('addClubMemberBtn')?.addEventListener('click', async () => {
-    const userId = parseInt($('clubMemberUserId').value, 10);
-    const role = $('clubMemberRole').value;
-    if (!currentClubId || !userId) return alert('Enter a user ID');
-    try {
-      await post(`/api/admin/clubs/${currentClubId}/members`, { userId, role });
-      $('clubMemberUserId').value = '';
-      showMessage($('clubMessage'), 'Member added');
-      loadClubMembers(currentClubId);
-    } catch (e) {
-      showMessage($('clubMessage'), 'Failed to add member', 'error');
-    }
-  });
-
-  // ===== Analytics =====
-  async function loadAnalytics() {
-    try {
-      const res = await get('/api/admin/analytics');
-      if (!res.success) return;
-      const { participation, clubActivity, resourceUtilization, budget } = res.analytics;
-      $('analyticsParticipation').innerHTML = participation.length
-        ? '<ul class="list">' + participation.map(p => `<li>${escapeHtml(p.month)} • ${p.registrations} registrations</li>`).join('') + '</ul>'
-        : '<span class="empty">No data</span>';
-      $('analyticsClubs').innerHTML = clubActivity.length
-        ? '<ul class="list">' + clubActivity.map(c => `<li>${escapeHtml(c.name)} • ${c.events} events • ${c.registrations} regs</li>`).join('') + '</ul>'
-        : '<span class="empty">No data</span>';
-      $('analyticsResources').innerHTML = resourceUtilization.length
-        ? '<ul class="list">' + resourceUtilization.map(r => `<li>${escapeHtml(r.name)} • ${Number(r.hours_booked).toFixed(1)} hrs</li>`).join('') + '</ul>'
-        : '<span class="empty">No data</span>';
-      $('analyticsBudget').innerHTML = `<p class="muted">Total budget: ${budget.total_budget} • Used: ${budget.used_budget}</p>`;
-    } catch (e) {
-      console.error('Error loading analytics:', e);
-    }
-  }
-
-  qsa('[data-export]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const type = btn.dataset.export;
-      const urlMap = {
-        events: '/api/admin/export/events.csv',
-        resources: '/api/admin/export/resources.csv',
-        bookings: '/api/admin/export/bookings.csv',
-        analytics: '/api/admin/export/analytics.xlsx'
-      };
-      const url = urlMap[type];
-      if (!url) return;
-      try {
-        const res = await fetch(url, { credentials: 'include' });
-        const blob = await res.blob();
-        const link = document.createElement('a');
-        link.href = window.URL.createObjectURL(blob);
-        link.download = type === 'analytics' ? 'analytics.xlsx' : `${type}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-      } catch (e) {
-        alert('Export failed');
-      }
-    });
-  });
 
   // ===== Settings =====
   async function loadSettings() {
@@ -1113,10 +692,6 @@
     loadDashboard();
     loadUsers();
     loadEvents();
-    loadResources();
-    loadBookings();
-    loadClubs();
-    loadAnalytics();
     loadSettings();
     loadLogs();
   }

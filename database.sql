@@ -85,21 +85,14 @@ CREATE TABLE IF NOT EXISTS events (
     title VARCHAR(255) NOT NULL,
     description TEXT NOT NULL,
     event_date DATE NOT NULL,
-    end_date DATE NULL,
     start_time TIME NOT NULL,
     end_time TIME NOT NULL,
     location VARCHAR(255) NULL,
     online_link VARCHAR(255) NULL,
     max_participants INT DEFAULT 0 NOT NULL,
     registration_deadline DATETIME NULL,
-    visibility ENUM('public', 'internal', 'club') DEFAULT 'public' NOT NULL,
-    status ENUM('draft', 'pending_approval', 'published', 'rejected', 'closed', 'completed') DEFAULT 'draft' NOT NULL,
+    status ENUM('draft', 'pending_approval', 'published', 'rejected', 'closed') DEFAULT 'draft' NOT NULL,
     rejection_reason TEXT NULL,
-    budget_total DECIMAL(10,2) DEFAULT 0.00 NOT NULL,
-    budget_used DECIMAL(10,2) DEFAULT 0.00 NOT NULL,
-    budget_currency CHAR(3) DEFAULT 'USD' NOT NULL,
-    budget_notes TEXT NULL,
-    completed_at DATETIME NULL,
     created_by INT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -110,7 +103,6 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX idx_events_organizer_date ON events(created_by, event_date);
 CREATE INDEX idx_events_status ON events(status);
-CREATE INDEX idx_events_visibility ON events(visibility);
 
 -- Joint events: multiple clubs per event
 CREATE TABLE IF NOT EXISTS event_clubs (
@@ -169,10 +161,6 @@ CREATE TABLE IF NOT EXISTS resource_bookings (
     status ENUM('pending', 'approved', 'rejected', 'cancelled', 'completed') DEFAULT 'pending',
     purpose TEXT,
     approved_by INT,
-    approved_at DATETIME NULL,
-    rejected_at DATETIME NULL,
-    cancelled_at DATETIME NULL,
-    completed_at DATETIME NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (resource_id) REFERENCES resources(id) ON DELETE CASCADE,
@@ -183,20 +171,6 @@ CREATE TABLE IF NOT EXISTS resource_bookings (
 CREATE INDEX idx_bookings_resource ON resource_bookings(resource_id);
 CREATE INDEX idx_bookings_user ON resource_bookings(user_id);
 CREATE INDEX idx_bookings_datetime ON resource_bookings(start_datetime, end_datetime);
-
--- Resource booking logs (approval/rejection/history)
-CREATE TABLE IF NOT EXISTS resource_booking_logs (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    booking_id INT NOT NULL,
-    action ENUM('created', 'approved', 'rejected', 'cancelled', 'completed', 'updated') NOT NULL,
-    actor_id INT NULL,
-    notes TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (booking_id) REFERENCES resource_bookings(id) ON DELETE CASCADE,
-    FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
-);
-
-CREATE INDEX idx_booking_logs_booking ON resource_booking_logs(booking_id);
 
 -- ==================== NOTIFICATIONS ====================
 CREATE TABLE IF NOT EXISTS notifications (
@@ -218,11 +192,8 @@ CREATE INDEX idx_notifications_read ON notifications(user_id, is_read);
 -- ==================== MESSAGES (1:1 and context) ====================
 CREATE TABLE IF NOT EXISTS message_threads (
     id INT PRIMARY KEY AUTO_INCREMENT,
-    type ENUM('direct', 'group', 'club', 'event') DEFAULT 'direct',
+    type ENUM('direct', 'club', 'event') DEFAULT 'direct',
     ref_id INT,
-    title VARCHAR(255),
-    created_by INT NULL,
-    last_message_at DATETIME NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -230,7 +201,6 @@ CREATE TABLE IF NOT EXISTS message_participants (
     id INT PRIMARY KEY AUTO_INCREMENT,
     thread_id INT NOT NULL,
     user_id INT NOT NULL,
-    role ENUM('owner', 'member') DEFAULT 'member',
     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY unique_participant (thread_id, user_id),
     FOREIGN KEY (thread_id) REFERENCES message_threads(id) ON DELETE CASCADE,
@@ -248,82 +218,6 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX idx_messages_thread ON messages(thread_id);
-
--- OTP codes for login/verification
-CREATE TABLE IF NOT EXISTS otp_codes (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    email VARCHAR(255) NOT NULL,
-    code_hash VARCHAR(255) NOT NULL,
-    purpose ENUM('login', 'verify') DEFAULT 'login',
-    expires_at DATETIME NOT NULL,
-    consumed_at DATETIME NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_otp_email ON otp_codes(email);
-CREATE INDEX idx_otp_expires ON otp_codes(expires_at);
-
--- OAuth account links
-CREATE TABLE IF NOT EXISTS oauth_accounts (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT NOT NULL,
-    provider VARCHAR(50) NOT NULL,
-    provider_user_id VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY unique_provider_user (provider, provider_user_id),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-
-CREATE INDEX idx_oauth_user ON oauth_accounts(user_id);
-
--- Fine-grained permissions
-CREATE TABLE IF NOT EXISTS permissions (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    perm_key VARCHAR(100) UNIQUE NOT NULL,
-    description VARCHAR(255)
-);
-
-CREATE TABLE IF NOT EXISTS role_permissions (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    role ENUM('admin', 'organizer', 'participant') NOT NULL,
-    permission_id INT NOT NULL,
-    allowed TINYINT(1) DEFAULT 1,
-    UNIQUE KEY unique_role_perm (role, permission_id),
-    FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS user_permissions (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT NOT NULL,
-    permission_id INT NOT NULL,
-    allowed TINYINT(1) DEFAULT 1,
-    UNIQUE KEY unique_user_perm (user_id, permission_id),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
-);
-
--- Reminders to avoid duplicates
-CREATE TABLE IF NOT EXISTS event_reminders (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    event_id INT NOT NULL,
-    user_id INT NOT NULL,
-    reminder_type ENUM('upcoming_24h', 'deadline_24h') NOT NULL,
-    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY unique_event_reminder (event_id, user_id, reminder_type),
-    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS booking_reminders (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    booking_id INT NOT NULL,
-    user_id INT NOT NULL,
-    reminder_type ENUM('upcoming_24h') NOT NULL,
-    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY unique_booking_reminder (booking_id, user_id, reminder_type),
-    FOREIGN KEY (booking_id) REFERENCES resource_bookings(id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
 
 -- ==================== ADMIN AUDIT LOGS ====================
 CREATE TABLE IF NOT EXISTS admin_logs (
@@ -365,35 +259,6 @@ INSERT INTO system_settings (setting_key, setting_value, setting_type, descripti
 ('registrations_frozen', 'false', 'boolean', 'Temporarily freeze all event registrations')
 ON DUPLICATE KEY UPDATE setting_key = setting_key;
 
--- Default permissions
-INSERT INTO permissions (perm_key, description) VALUES
-('event.create', 'Create events'),
-('event.update', 'Update events'),
-('event.publish', 'Publish events'),
-('event.approve', 'Approve events'),
-('event.manage_all', 'Manage all events'),
-('resource.book', 'Book resources'),
-('resource.approve', 'Approve resource bookings'),
-('resource.manage', 'Manage resources'),
-('club.manage', 'Manage clubs and memberships'),
-('analytics.view', 'View analytics'),
-('message.send', 'Send messages')
-ON DUPLICATE KEY UPDATE perm_key = perm_key;
-
-INSERT INTO role_permissions (role, permission_id, allowed)
-SELECT 'admin', id, 1 FROM permissions
-ON DUPLICATE KEY UPDATE allowed = VALUES(allowed);
-
-INSERT INTO role_permissions (role, permission_id, allowed)
-SELECT 'organizer', id, 1 FROM permissions
-WHERE perm_key IN ('event.create','event.update','event.publish','resource.book','message.send','analytics.view')
-ON DUPLICATE KEY UPDATE allowed = VALUES(allowed);
-
-INSERT INTO role_permissions (role, permission_id, allowed)
-SELECT 'participant', id, 1 FROM permissions
-WHERE perm_key IN ('resource.book','message.send')
-ON DUPLICATE KEY UPDATE allowed = VALUES(allowed);
-
 -- ==================== SEED DATA ====================
 -- Default users: run app once to bcrypt-hash; or use: node -e "require('bcrypt').hash('password123',10).then(h=>console.log(h))"
 -- Then: INSERT INTO users (email, password, role) VALUES ('admin@example.com', '<hash>', 'admin'), ...
@@ -417,17 +282,15 @@ INSERT INTO clubs (name, slug, description, type) VALUES
 
 -- Sample event for organizer (1 week from now)
 -- Note: This will only work if organizer user exists
-INSERT INTO events (title, description, event_date, end_date, start_time, end_time, location, max_participants, status, created_by, visibility)
+INSERT INTO events (title, description, event_date, start_time, end_time, location, max_participants, status, created_by)
 SELECT 
     'Tech Talk 2024',
     'Monthly tech meetup and coding discussion. Join us for an evening of learning and networking.',
-    DATE_ADD(CURDATE(), INTERVAL 7 DAY),
     DATE_ADD(CURDATE(), INTERVAL 7 DAY),
     '18:00:00',
     '20:00:00',
     'Main Hall',
     50,
     'published',
-    id,
-    'public'
+    id
 FROM users WHERE role = 'organizer' LIMIT 1;

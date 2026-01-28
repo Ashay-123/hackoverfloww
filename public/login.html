@@ -51,45 +51,6 @@
                 <div id="message" class="message"></div>
             </form>
 
-            <div class="divider"><span>or</span></div>
-
-            <button type="button" class="oauth-btn google" onclick="window.location.href='/auth/google'">
-                Sign in with Google
-            </button>
-
-            <!-- OTP Login Form -->
-            <form id="otpForm" onsubmit="handleOtpVerify(event)" style="display: none;">
-                <div class="input-group">
-                    <label for="otpEmail">Email Address</label>
-                    <input 
-                        type="email" 
-                        id="otpEmail" 
-                        name="otpEmail" 
-                        placeholder="Enter your email" 
-                        required
-                        autocomplete="email"
-                    >
-                </div>
-
-                <div class="input-group">
-                    <label for="otpCode">OTP Code</label>
-                    <input 
-                        type="text" 
-                        id="otpCode" 
-                        name="otpCode" 
-                        placeholder="Enter the 6-digit code"
-                        maxlength="6"
-                    >
-                </div>
-
-                <div class="otp-actions">
-                    <button type="button" class="btn btn-ghost" id="requestOtpBtn" onclick="requestOtp(event)">Request OTP</button>
-                    <button type="submit" class="login-btn">Verify OTP</button>
-                </div>
-
-                <div id="otpMessage" class="message"></div>
-            </form>
-
             <!-- Sign Up Form -->
             <form id="signupForm" onsubmit="handleSignup(event)" style="display: none;">
                 <div class="input-group">
@@ -150,7 +111,6 @@
             <!-- Toggle between Login and Sign Up -->
             <div class="form-toggle">
                 <p id="toggleText">Don't have an account? <a href="#" onclick="toggleForm(event)">Sign up</a></p>
-                <p><a href="#" onclick="toggleOtp(event)">Use OTP login</a></p>
             </div>
         </div>
     </div>
