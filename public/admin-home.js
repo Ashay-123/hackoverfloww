@@ -79,6 +79,19 @@
     return res.json();
   }
 
+  async function hydrateUser() {
+    const cached = getUser();
+    if (cached && cached.id) return cached;
+    try {
+      const r = await get('/api/profile');
+      if (r && r.success && r.user) {
+        sessionStorage.setItem('user', JSON.stringify(r.user));
+        return r.user;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   function escapeHtml(s) {
     if (s == null) return '';
     const d = document.createElement('div');
@@ -680,8 +693,8 @@
   }
 
   // ===== Init =====
-  function init() {
-    const u = getUser();
+  async function init() {
+    const u = await hydrateUser();
     if (!u || !u.id || u.role !== 'admin') {
       redirectLogin();
       return;

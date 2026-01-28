@@ -357,7 +357,7 @@ app.post('/login', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
     const user = rows[0];
-    if (!user || !(await bcrypt.compare(password, user.password))) {
+    if (!user || !user.password || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
     // Check if account is active

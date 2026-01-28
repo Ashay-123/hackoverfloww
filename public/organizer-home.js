@@ -99,6 +99,20 @@
     });
   }
 
+  async function hydrateUser() {
+    const cached = getUser();
+    if (cached && cached.id) return cached;
+    try {
+      const r = await get('/api/profile');
+      if (r && r.success && r.user) {
+        user = r.user;
+        sessionStorage.setItem('user', JSON.stringify(r.user));
+        return r.user;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   // ---------- DOM ----------
   function $(id) { return document.getElementById(id); }
   function qs(s) { return document.querySelector(s); }
@@ -926,8 +940,8 @@
   }
 
   // ---------- Init ----------
-  function init() {
-    const u = getUser();
+  async function init() {
+    const u = await hydrateUser();
     if (!u || !u.id) { redirectLogin(); return; }
     if (u.role !== 'organizer' && u.role !== 'admin') { redirectByRole(u); return; }
     loadProfile();
