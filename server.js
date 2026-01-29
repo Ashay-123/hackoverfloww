@@ -503,6 +503,7 @@ app.post('/api/clubs/join', requireAuth, async (req, res) => {
 
 app.get('/api/events', async (req, res) => {
   try {
+    const uid = getUserId(req) || -1;
     const [rows] = await pool.query(
       `SELECT 
          e.id,
@@ -521,11 +522,19 @@ app.get('/api/events', async (req, res) => {
            FROM event_clubs ec
            JOIN clubs c ON c.id = ec.club_id
            WHERE ec.event_id = e.id
-         ) AS club_name
+         ) AS club_name,
+         (
+           SELECT er.status
+           FROM event_registrations er
+           WHERE er.event_id = e.id AND er.user_id = ?
+           ORDER BY er.registered_at DESC
+           LIMIT 1
+         ) AS reg_status
        FROM events e
        WHERE e.status IN ('published', 'closed')
        ORDER BY e.event_date DESC, e.start_time DESC
-       LIMIT 50`
+       LIMIT 50`,
+      [uid]
     );
     res.json({ success: true, events: rows });
   } catch (e) {

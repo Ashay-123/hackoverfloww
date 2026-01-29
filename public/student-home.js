@@ -262,14 +262,20 @@
         const deadline = e.registration_deadline ? new Date(e.registration_deadline) : null;
         const deadlinePassed = deadline && deadline.getTime() < Date.now();
         const isClosed = status === 'closed';
-        const canRegister = !isClosed && !deadlinePassed;
-        const registerLabel = isClosed ? 'Event closed' : deadlinePassed ? 'Registration closed' : 'Register Now';
-        const registerButton = canRegister
-          ? `<button type="button" class="btn btn-primary btn-register" data-event-id="${e.id}">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
-              ${registerLabel}
-            </button>`
-          : `<button type="button" class="btn btn-primary btn-register" disabled>${registerLabel}</button>`;
+        const regStatus = e.reg_status || null;
+        const isRegistered = regStatus && regStatus !== 'cancelled';
+        const canRegister = !isRegistered && !isClosed && !deadlinePassed;
+        const registerLabel = isRegistered
+          ? (regStatus === 'attended' ? 'Attended' : 'Registered')
+          : isClosed ? 'Event closed' : deadlinePassed ? 'Registration closed' : 'Register Now';
+        const registerButton = isRegistered
+          ? `<button type="button" class="btn btn-success btn-register" disabled>✓ ${registerLabel}</button>`
+          : canRegister
+            ? `<button type="button" class="btn btn-primary btn-register" data-event-id="${e.id}">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+                ${registerLabel}
+              </button>`
+            : `<button type="button" class="btn btn-primary btn-register" disabled>${registerLabel}</button>`;
         
         return `<div class="event-card">
           <div class="event-header">
