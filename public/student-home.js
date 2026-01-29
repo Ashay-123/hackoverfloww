@@ -591,18 +591,36 @@
     return d.innerHTML;
   }
 
+  function parseDateValue(s, opts = {}) {
+    if (!s) return null;
+    if (s instanceof Date) return isNaN(s.getTime()) ? null : s;
+    if (typeof s === 'string') {
+      const trimmed = s.trim();
+      if (!trimmed) return null;
+      if (trimmed.includes('T') || trimmed.includes(' ')) {
+        const normalized = trimmed.includes(' ') && !trimmed.includes('T')
+          ? trimmed.replace(' ', 'T')
+          : trimmed;
+        const d = new Date(normalized);
+        return isNaN(d.getTime()) ? null : d;
+      }
+      const d = new Date(trimmed + 'T00:00:00');
+      return isNaN(d.getTime()) ? null : d;
+    }
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
   function formatDate(s) {
-    if (!s) return '—';
-    try { return new Date(s + 'T00:00:00').toLocaleDateString(undefined, { dateStyle: 'medium' }); } catch (_) { return s; }
+    const d = parseDateValue(s);
+    if (!d) return s || '—';
+    return d.toLocaleDateString(undefined, { dateStyle: 'medium' });
   }
 
   function formatDateTime(s) {
-    if (!s) return '—';
-    try {
-      const d = new Date(s);
-      if (isNaN(d.getTime())) return s;
-      return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
-    } catch (_) { return s; }
+    const d = parseDateValue(s);
+    if (!d) return s || '—';
+    return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
   }
 
   // ---------- Init ----------
