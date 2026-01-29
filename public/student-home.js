@@ -556,6 +556,15 @@
     });
   }
 
+  // Auto-refresh notifications every 30 seconds
+  setInterval(() => {
+    if (window.location.hash === '#notifications') {
+      loadNotifications();
+    }
+    updateNotifBadge();
+    loadRecentNotifs();
+  }, 30000);
+
   // ---------- Messages (threads) ----------
   function loadMessageThreads() {
     const el = $('messageThreads');
