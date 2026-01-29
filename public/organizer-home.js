@@ -314,6 +314,11 @@
       }
       if (status === 'published') {
         actions.push(`<button type="button" class="btn btn-sm btn-secondary" data-close="${e.id}">Close</button>`);
+        actions.push(`<button type="button" class="btn btn-sm btn-primary" data-notify="${e.id}">Notify Participants</button>`);
+        actions.push(`<button type="button" class="btn btn-sm btn-ghost" data-registrations="${e.id}">View Registrations</button>`);
+      }
+      if (status === 'pending_approval' || status === 'published' || status === 'closed') {
+        actions.push(`<button type="button" class="btn btn-sm btn-ghost" data-registrations="${e.id}">View Registrations</button>`);
       }
       actions.push(`<button type="button" class="btn btn-sm btn-ghost" data-duplicate="${e.id}">Duplicate</button>`);
       
@@ -352,6 +357,12 @@
     });
     el.querySelectorAll('[data-duplicate]').forEach(btn => {
       btn.addEventListener('click', () => duplicateEvent(parseInt(btn.dataset.duplicate, 10)));
+    });
+    el.querySelectorAll('[data-notify]').forEach(btn => {
+      btn.addEventListener('click', () => showNotifyModal(parseInt(btn.dataset.notify, 10)));
+    });
+    el.querySelectorAll('[data-registrations]').forEach(btn => {
+      btn.addEventListener('click', () => showRegistrations(parseInt(btn.dataset.registrations, 10)));
     });
   }
 
@@ -757,23 +768,70 @@
     currentEventId = id;
     get('/api/events/my-events').then(r => {
       const event = (r.events || []).find(e => e.id === id);
-      $('modalEventTitle').textContent = 'Notify participants: ' + (event ? escapeHtml(event.title) : 'Event');
-      $('modalBody').innerHTML = '<form id="notifyForm" class="form">' +
-        '<div class="field"><label>Title</label><input type="text" id="nTitle" value="Update: ' + escapeHtml(event?.title || 'Event') + '" required></div>' +
-        '<div class="field"><label>Message</label><textarea id="nMessage" rows="4" required placeholder="Message to send to all registered participants"></textarea></div>' +
-        '<div class="field"><label>Type</label><select id="nType"><option value="general">General</option><option value="upcoming_event">Upcoming event</option><option value="event_approval">Event approval</option></select></div>' +
-        '<button type="submit" class="btn btn-primary">Send notification</button></form>';
-      $('eventModal').style.display = 'flex';
-      $('notifyForm').addEventListener('submit', function (e) {
-        e.preventDefault();
-        post('/api/events/' + currentEventId + '/notify', {
-          title: $('nTitle').value.trim(),
-          message: $('nMessage').value.trim(),
-          type: $('nType').value
-        }).then(r => {
-          if (r.success) { alert(r.message || 'Notification sent.'); closeModal(); }
-          else alert(r.message || 'Failed to send.');
+      // Get registration count
+      get('/api/events/' + id + '/registrations').then(regRes => {
+        const regCount = regRes.success ? (regRes.registrations || []).length : 0;
+        $('modalEventTitle').textContent = 'Notify participants: ' + (event ? escapeHtml(event.title) : 'Event');
+        $('modalBody').innerHTML = '<form id="notifyForm" class="form">' +
+          '<div class="field">' +
+          '<p class="muted">This notification will be sent to <strong>' + regCount + '</strong> registered participant' + (regCount !== 1 ? 's' : '') + '.</p>' +
+          (regCount === 0 ? '<p class="muted" style="color: #e74c3c;">No participants registered yet. Notifications will be sent when participants register.</p>' : '') +
+          '</div>' +
+          '<div class="field"><label>Title</label><input type="text" id="nTitle" value="Update: ' + escapeHtml(event?.title || 'Event') + '" required></div>' +
+          '<div class="field"><label>Message</label><textarea id="nMessage" rows="4" required placeholder="Message to send to all registered participants"></textarea></div>' +
+          '<div class="field"><label>Type</label><select id="nType"><option value="general">General</option><option value="upcoming_event">Upcoming event</option><option value="event_approval">Event approval</option></select></div>' +
+          '<div class="form-actions">' +
+          '<button type="submit" class="btn btn-primary" id="notifySubmitBtn" ' + (regCount === 0 ? 'disabled' : '') + '>Send notification</button>' +
+          '<button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+          '</div></form>';
+        $('eventModal').style.display = 'flex';
+        
+        // Remove any existing listeners by cloning the form
+        const form = $('notifyForm');
+        if (form) {
+          const newForm = form.cloneNode(true);
+          form.parentNode.replaceChild(newForm, form);
+        }
+        
+        $('notifyForm')?.addEventListener('submit', function (e) {
+          e.preventDefault();
+          if (regCount === 0) {
+            alert('No participants registered yet. Notifications will be sent when participants register.');
+            return;
+          }
+          const submitBtn = $('notifySubmitBtn');
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Sending...';
+          post('/api/events/' + currentEventId + '/notify', {
+            title: $('nTitle').value.trim(),
+            message: $('nMessage').value.trim(),
+            type: $('nType').value
+          }).then(r => {
+            if (r.success) {
+              showMessage(r.message || 'Notification sent successfully!', 'success');
+              closeModal();
+            } else {
+              showMessage(r.message || 'Failed to send notification.', 'error');
+              submitBtn.disabled = false;
+              submitBtn.textContent = 'Send notification';
+            }
+          }).catch(err => {
+            console.error('Error sending notification:', err);
+            showMessage('Failed to send notification. Please try again.', 'error');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Send notification';
+          });
         });
+      }).catch(err => {
+        console.error('Error loading registrations:', err);
+        // Still show the form even if registration count fails
+        $('modalEventTitle').textContent = 'Notify participants: ' + (event ? escapeHtml(event.title) : 'Event');
+        $('modalBody').innerHTML = '<form id="notifyForm" class="form">' +
+          '<div class="field"><label>Title</label><input type="text" id="nTitle" value="Update: ' + escapeHtml(event?.title || 'Event') + '" required></div>' +
+          '<div class="field"><label>Message</label><textarea id="nMessage" rows="4" required placeholder="Message to send to all registered participants"></textarea></div>' +
+          '<div class="field"><label>Type</label><select id="nType"><option value="general">General</option><option value="upcoming_event">Upcoming event</option><option value="event_approval">Event approval</option></select></div>' +
+          '<button type="submit" class="btn btn-primary">Send notification</button></form>';
+        $('eventModal').style.display = 'flex';
       });
     });
   }
@@ -894,6 +952,15 @@
       if (b) { b.textContent = n; b.style.display = n ? 'flex' : 'none'; }
     });
   }
+
+  // Auto-refresh notifications every 30 seconds
+  setInterval(() => {
+    if (window.location.hash === '#notifications') {
+      loadNotifications();
+    }
+    updateNotifBadge();
+    loadRecentNotifs();
+  }, 30000);
 
   // ---------- Messages ----------
   function loadMessageThreads() {
