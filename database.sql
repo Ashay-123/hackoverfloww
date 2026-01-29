@@ -252,6 +252,110 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX idx_messages_thread ON messages(thread_id);
 
+-- ==================== CHAT (Event/Club threads) ====================
+CREATE TABLE IF NOT EXISTS chat_threads (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    type ENUM('club', 'event') NOT NULL,
+    ref_id INT NOT NULL,
+    last_message_at TIMESTAMP NULL DEFAULT NULL,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_chat_thread (type, ref_id)
+);
+
+CREATE INDEX idx_chat_threads_type_ref ON chat_threads(type, ref_id);
+CREATE INDEX idx_chat_threads_last_message ON chat_threads(last_message_at);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    thread_id INT NOT NULL,
+    parent_id INT NULL,
+    sender_id INT NOT NULL,
+    body TEXT NOT NULL,
+    is_announcement TINYINT(1) DEFAULT 0,
+    is_deleted TINYINT(1) DEFAULT 0,
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    deleted_by INT NULL,
+    edited_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_id) REFERENCES chat_messages(id) ON DELETE SET NULL,
+    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (deleted_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_chat_messages_thread ON chat_messages(thread_id);
+CREATE INDEX idx_chat_messages_parent ON chat_messages(parent_id);
+CREATE INDEX idx_chat_messages_sender ON chat_messages(sender_id);
+CREATE INDEX idx_chat_messages_created ON chat_messages(created_at);
+
+CREATE TABLE IF NOT EXISTS chat_votes (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    message_id INT NOT NULL,
+    user_id INT NOT NULL,
+    vote TINYINT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_chat_vote (message_id, user_id),
+    FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_chat_votes_message ON chat_votes(message_id);
+CREATE INDEX idx_chat_votes_user ON chat_votes(user_id);
+
+CREATE TABLE IF NOT EXISTS chat_pins (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    thread_id INT NOT NULL,
+    message_id INT NOT NULL,
+    pinned_by INT NULL,
+    pinned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_chat_pin (thread_id, message_id),
+    FOREIGN KEY (thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE,
+    FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
+    FOREIGN KEY (pinned_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_chat_pins_thread ON chat_pins(thread_id);
+
+CREATE TABLE IF NOT EXISTS chat_banned_words (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    word VARCHAR(100) UNIQUE NOT NULL,
+    created_by INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_user_offenses (
+    user_id INT PRIMARY KEY,
+    offense_count INT DEFAULT 0,
+    last_offense_at TIMESTAMP NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_bans (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    scope ENUM('chat', 'system') DEFAULT 'chat',
+    reason VARCHAR(255) NOT NULL,
+    offense_count INT DEFAULT 0,
+    banned_by INT NULL,
+    start_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    end_at TIMESTAMP NULL,
+    manual_unban_required TINYINT(1) DEFAULT 0,
+    revoked_at TIMESTAMP NULL,
+    revoked_by INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (banned_by) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (revoked_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_user_bans_user ON user_bans(user_id, scope);
+CREATE INDEX idx_user_bans_active ON user_bans(scope, revoked_at, end_at);
+
 -- ==================== ADMIN AUDIT LOGS ====================
 CREATE TABLE IF NOT EXISTS admin_logs (
     id INT PRIMARY KEY AUTO_INCREMENT,

@@ -12,6 +12,15 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const publicDir = path.join(__dirname, 'public');
 const isProduction = process.env.NODE_ENV === 'production';
+const CHAT_RATE_LIMIT_PER_MIN = Number.isFinite(parseInt(process.env.CHAT_RATE_LIMIT_PER_MIN, 10))
+  ? parseInt(process.env.CHAT_RATE_LIMIT_PER_MIN, 10)
+  : 6;
+const CHAT_DUPLICATE_WINDOW_SEC = Number.isFinite(parseInt(process.env.CHAT_DUPLICATE_WINDOW_SEC, 10))
+  ? parseInt(process.env.CHAT_DUPLICATE_WINDOW_SEC, 10)
+  : 45;
+const CHAT_EDIT_WINDOW_MIN = Number.isFinite(parseInt(process.env.CHAT_EDIT_WINDOW_MIN, 10))
+  ? parseInt(process.env.CHAT_EDIT_WINDOW_MIN, 10)
+  : 10;
 
 // MySQL config - set DB_HOST, DB_USER, DB_PASSWORD, DB_NAME in env or use defaults.
 // These values also work for hosted MySQL (Render, Railway, AWS RDS, etc.).
@@ -170,6 +179,241 @@ async function getSetting(key) {
     console.error('Failed to get setting:', key, e);
     return null;
   }
+}
+
+// ==================== CHAT HELPERS ====================
+const bannedWordsCache = { words: null, loadedAt: 0 };
+const BANNED_WORDS_CACHE_MS = 5 * 60 * 1000;
+
+function normalizeChatBody(body) {
+  return String(body || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function getChatBannedWords() {
+  const now = Date.now();
+  if (bannedWordsCache.words && (now - bannedWordsCache.loadedAt) < BANNED_WORDS_CACHE_MS) {
+    return bannedWordsCache.words;
+  }
+  let words = [];
+  try {
+    const [rows] = await pool.query('SELECT word FROM chat_banned_words');
+    words = rows.map(r => String(r.word || '').trim()).filter(Boolean);
+  } catch (e) {
+    console.error('Failed to load banned words:', e.message);
+  }
+  if (!words.length && process.env.CHAT_BANNED_WORDS) {
+    words = process.env.CHAT_BANNED_WORDS.split(',').map(w => w.trim()).filter(Boolean);
+  }
+  bannedWordsCache.words = words;
+  bannedWordsCache.loadedAt = now;
+  return words;
+}
+
+function findBannedWords(body, words) {
+  const found = [];
+  if (!body || !words || !words.length) return found;
+  const text = String(body);
+  const lower = text.toLowerCase();
+  for (const w of words) {
+    const word = String(w || '').trim();
+    if (!word) continue;
+    const lowerWord = word.toLowerCase();
+    if (/^[a-z0-9]+$/i.test(word)) {
+      const regex = new RegExp(`\\b${escapeRegex(word)}\\b`, 'i');
+      if (regex.test(text)) found.push(word);
+    } else if (lower.includes(lowerWord)) {
+      found.push(word);
+    }
+  }
+  return found;
+}
+
+async function getActiveChatBan(userId) {
+  const [rows] = await pool.query(
+    `SELECT * FROM user_bans 
+     WHERE user_id = ? AND scope = 'chat' 
+       AND revoked_at IS NULL 
+       AND (end_at IS NULL OR end_at > NOW())
+     ORDER BY start_at DESC
+     LIMIT 1`,
+    [userId]
+  );
+  return rows[0] || null;
+}
+
+async function recordChatOffenseAndBan(userId) {
+  await pool.query(
+    `INSERT INTO chat_user_offenses (user_id, offense_count, last_offense_at)
+     VALUES (?, 1, NOW())
+     ON DUPLICATE KEY UPDATE offense_count = offense_count + 1, last_offense_at = NOW()`,
+    [userId]
+  );
+  const [rows] = await pool.query('SELECT offense_count FROM chat_user_offenses WHERE user_id = ?', [userId]);
+  const offenseCount = rows[0]?.offense_count || 1;
+
+  let endAt = null;
+  let manualUnban = 0;
+  if (offenseCount === 1) {
+    endAt = new Date(Date.now() + 60 * 60 * 1000);
+  } else if (offenseCount === 2) {
+    endAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  } else {
+    manualUnban = 1;
+  }
+
+  await pool.query(
+    `INSERT INTO user_bans (user_id, scope, reason, offense_count, start_at, end_at, manual_unban_required)
+     VALUES (?, 'chat', ?, ?, NOW(), ?, ?)`,
+    [userId, 'bad_words', offenseCount, endAt ? toMySqlDateTimeLocal(endAt) : null, manualUnban]
+  );
+
+  return { offenseCount, endAt, manualUnban };
+}
+
+async function enforceChatPostingRules(userId, threadId, body) {
+  const activeBan = await getActiveChatBan(userId);
+  if (activeBan) {
+    return { ok: false, error: 'You are currently banned from chat.', ban: activeBan };
+  }
+
+  const bannedWords = await getChatBannedWords();
+  const found = findBannedWords(body, bannedWords);
+  if (found.length) {
+    const banInfo = await recordChatOffenseAndBan(userId);
+    return { 
+      ok: false, 
+      error: 'Message contains banned words. You have been temporarily banned.', 
+      ban: banInfo 
+    };
+  }
+
+  if (CHAT_RATE_LIMIT_PER_MIN > 0) {
+    const [rows] = await pool.query(
+      `SELECT COUNT(*) as c FROM chat_messages 
+       WHERE sender_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 MINUTE)`,
+      [userId]
+    );
+    if ((rows[0]?.c || 0) >= CHAT_RATE_LIMIT_PER_MIN) {
+      return { ok: false, error: 'Rate limit exceeded. Please slow down.' };
+    }
+  }
+
+  if (CHAT_DUPLICATE_WINDOW_SEC > 0) {
+    const [rows] = await pool.query(
+      `SELECT body, created_at FROM chat_messages 
+       WHERE sender_id = ? AND thread_id = ? 
+       ORDER BY created_at DESC LIMIT 1`,
+      [userId, threadId]
+    );
+    if (rows.length) {
+      const lastBody = normalizeChatBody(rows[0].body);
+      const nextBody = normalizeChatBody(body);
+      const lastTime = new Date(rows[0].created_at).getTime();
+      if (lastBody && nextBody && lastBody === nextBody) {
+        const diffSec = (Date.now() - lastTime) / 1000;
+        if (diffSec <= CHAT_DUPLICATE_WINDOW_SEC) {
+          return { ok: false, error: 'Duplicate message blocked. Please wait before repeating.' };
+        }
+      }
+    }
+  }
+
+  return { ok: true };
+}
+
+async function ensureChatThreads(type, ids) {
+  if (!ids || !ids.length) return;
+  const values = ids.map(() => '(?, ?)').join(', ');
+  const params = [];
+  ids.forEach(id => {
+    params.push(type, id);
+  });
+  await pool.query(`INSERT IGNORE INTO chat_threads (type, ref_id) VALUES ${values}`, params);
+}
+
+async function getChatThreadAccess(threadId, userId, role) {
+  const [rows] = await pool.query('SELECT * FROM chat_threads WHERE id = ?', [threadId]);
+  if (!rows.length) return { ok: false, error: 'Thread not found' };
+  const thread = rows[0];
+
+  if (thread.deleted_at && role !== 'admin') {
+    return { ok: false, error: 'Thread has been deleted' };
+  }
+
+  if (role === 'admin') {
+    let title = '';
+    if (thread.type === 'club') {
+      const [club] = await pool.query('SELECT name FROM clubs WHERE id = ?', [thread.ref_id]);
+      title = club[0]?.name || 'Club';
+    } else {
+      const [event] = await pool.query('SELECT title FROM events WHERE id = ?', [thread.ref_id]);
+      title = event[0]?.title || 'Event';
+    }
+    return { ok: true, thread, title, canRead: true, canPost: true, canPin: true, canAnnounce: true, canModerate: true };
+  }
+
+  if (thread.type === 'club') {
+    const [club] = await pool.query('SELECT name FROM clubs WHERE id = ?', [thread.ref_id]);
+    if (!club.length) return { ok: false, error: 'Club not found' };
+    const [membership] = await pool.query(
+      'SELECT role FROM club_members WHERE club_id = ? AND user_id = ?',
+      [thread.ref_id, userId]
+    );
+    if (!membership.length) return { ok: false, error: 'Club membership required' };
+    const memberRole = membership[0].role;
+    const isLeader = memberRole === 'head' || memberRole === 'coordinator';
+    return { 
+      ok: true, 
+      thread, 
+      title: club[0].name, 
+      canRead: true, 
+      canPost: true, 
+      canPin: isLeader, 
+      canAnnounce: isLeader, 
+      canModerate: isLeader 
+    };
+  }
+
+  if (thread.type === 'event') {
+    const [events] = await pool.query('SELECT id, title, created_by FROM events WHERE id = ?', [thread.ref_id]);
+    if (!events.length) return { ok: false, error: 'Event not found' };
+    const event = events[0];
+    const isOrganizer = event.created_by === userId;
+    if (isOrganizer) {
+      return { 
+        ok: true, 
+        thread, 
+        title: event.title, 
+        canRead: true, 
+        canPost: true, 
+        canPin: true, 
+        canAnnounce: true, 
+        canModerate: true 
+      };
+    }
+    const [reg] = await pool.query(
+      `SELECT status FROM event_registrations 
+       WHERE event_id = ? AND user_id = ? AND status <> 'cancelled'`,
+      [event.id, userId]
+    );
+    if (!reg.length) return { ok: false, error: 'Event registration required' };
+    return { 
+      ok: true, 
+      thread, 
+      title: event.title, 
+      canRead: true, 
+      canPost: true, 
+      canPin: false, 
+      canAnnounce: false, 
+      canModerate: false 
+    };
+  }
+
+  return { ok: false, error: 'Invalid thread type' };
 }
 
 // Helper: Get client IP
@@ -1228,6 +1472,464 @@ app.get('/api/messages/threads', requireAuth, async (req, res) => {
   }
 });
 
+// ==================== CHAT (Event/Club threads) ====================
+
+app.get('/api/chat/threads', requireAuth, async (req, res) => {
+  const userId = getUserId(req);
+  const role = req.session.role;
+  const limit = Math.min(parseInt(req.query.limit || '200', 10), 500);
+  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
+  try {
+    let clubs = [];
+    let events = [];
+
+    if (role === 'admin') {
+      const [clubRows] = await pool.query('SELECT id, name FROM clubs ORDER BY name');
+      clubs = clubRows;
+      const [eventRows] = await pool.query('SELECT id, title FROM events ORDER BY created_at DESC LIMIT ?', [limit]);
+      events = eventRows;
+    } else {
+      const [clubRows] = await pool.query(
+        `SELECT c.id, c.name, cm.role as membership_role 
+         FROM club_members cm 
+         JOIN clubs c ON c.id = cm.club_id 
+         WHERE cm.user_id = ?`,
+        [userId]
+      );
+      clubs = clubRows;
+      const [eventRows] = await pool.query(
+        `SELECT e.id, e.title, e.created_by
+         FROM events e
+         LEFT JOIN event_registrations er ON er.event_id = e.id AND er.user_id = ?
+         WHERE e.created_by = ? OR (er.user_id IS NOT NULL AND er.status <> 'cancelled')
+         ORDER BY e.event_date DESC, e.start_time DESC`,
+        [userId, userId]
+      );
+      events = eventRows;
+    }
+
+    const clubIds = clubs.map(c => c.id);
+    const eventIds = events.map(e => e.id);
+
+    await ensureChatThreads('club', clubIds);
+    await ensureChatThreads('event', eventIds);
+
+    if (!clubIds.length && !eventIds.length) {
+      return res.json({ success: true, threads: [] });
+    }
+
+    const clauses = [];
+    const params = [];
+    if (clubIds.length) {
+      clauses.push(`(ct.type = 'club' AND ct.ref_id IN (${clubIds.map(() => '?').join(',')}))`);
+      params.push(...clubIds);
+    }
+    if (eventIds.length) {
+      clauses.push(`(ct.type = 'event' AND ct.ref_id IN (${eventIds.map(() => '?').join(',')}))`);
+      params.push(...eventIds);
+    }
+    let where = clauses.join(' OR ');
+    if (role !== 'admin') where = `(${where}) AND ct.deleted_at IS NULL`;
+
+    const [threads] = await pool.query(
+      `SELECT ct.id, ct.type, ct.ref_id, ct.created_at, ct.last_message_at,
+              c.name as club_name, e.title as event_title
+       FROM chat_threads ct
+       LEFT JOIN clubs c ON ct.type = 'club' AND c.id = ct.ref_id
+       LEFT JOIN events e ON ct.type = 'event' AND e.id = ct.ref_id
+       WHERE ${where}
+       ORDER BY COALESCE(ct.last_message_at, ct.created_at) DESC
+       LIMIT ${limit}`,
+      params
+    );
+
+    const result = threads.map(t => ({
+      id: t.id,
+      type: t.type,
+      ref_id: t.ref_id,
+      title: t.type === 'club' ? t.club_name : t.event_title,
+      last_message_at: t.last_message_at || t.created_at
+    }));
+
+    res.json({ success: true, threads: result });
+  } catch (e) {
+    console.error('Error loading chat threads:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.get('/api/chat/threads/:threadId', requireAuth, async (req, res) => {
+  const userId = getUserId(req);
+  const role = req.session.role;
+  const threadId = parseInt(req.params.threadId, 10);
+  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
+  if (!threadId) return res.status(400).json({ success: false, message: 'Invalid thread' });
+  try {
+    const access = await getChatThreadAccess(threadId, userId, role);
+    if (!access.ok) return res.status(403).json({ success: false, message: access.error });
+
+    const activeBan = await getActiveChatBan(userId);
+    const [pinRows] = await pool.query('SELECT message_id FROM chat_pins WHERE thread_id = ?', [threadId]);
+    const pinnedIds = pinRows.map(r => r.message_id);
+
+    const [rows] = await pool.query(
+      `SELECT m.id, m.thread_id, m.parent_id, m.sender_id, m.body, m.is_announcement, m.is_deleted,
+              m.deleted_at, m.deleted_by, m.edited_at, m.created_at,
+              u.role as sender_role, u.email as sender_email,
+              up.full_name as sender_name,
+              uv.vote as user_vote,
+              COALESCE(vs.upvotes, 0) as upvotes,
+              COALESCE(vs.downvotes, 0) as downvotes
+       FROM chat_messages m
+       JOIN users u ON u.id = m.sender_id
+       LEFT JOIN user_profiles up ON up.user_id = u.id
+       LEFT JOIN (
+         SELECT message_id,
+           SUM(CASE WHEN vote = 1 THEN 1 ELSE 0 END) as upvotes,
+           SUM(CASE WHEN vote = -1 THEN 1 ELSE 0 END) as downvotes
+         FROM chat_votes
+         GROUP BY message_id
+       ) vs ON vs.message_id = m.id
+       LEFT JOIN chat_votes uv ON uv.message_id = m.id AND uv.user_id = ?
+       WHERE m.thread_id = ?
+       ORDER BY m.created_at ASC`,
+      [userId, threadId]
+    );
+
+    const now = Date.now();
+    const isAdmin = role === 'admin';
+    const messages = rows.map(r => {
+      const created = new Date(r.created_at);
+      const minutesAgo = (now - created.getTime()) / 60000;
+      const canEdit = r.sender_id === userId && !r.is_deleted && minutesAgo <= CHAT_EDIT_WINDOW_MIN;
+      const canDelete = isAdmin || access.canModerate || r.sender_id === userId;
+      const name = r.sender_name || (r.sender_email ? r.sender_email.split('@')[0] : 'User');
+      let body = r.body;
+      let displayBody = r.body;
+      if (r.is_deleted && !isAdmin) {
+        body = null;
+        displayBody = 'Message deleted';
+      }
+      return {
+        id: r.id,
+        thread_id: r.thread_id,
+        parent_id: r.parent_id,
+        sender_id: r.sender_id,
+        sender_name: name,
+        sender_role: r.sender_role,
+        body,
+        display_body: displayBody,
+        is_announcement: !!r.is_announcement,
+        is_deleted: !!r.is_deleted,
+        deleted_at: r.deleted_at,
+        deleted_by: r.deleted_by,
+        edited_at: r.edited_at,
+        created_at: r.created_at,
+        upvotes: r.upvotes,
+        downvotes: r.downvotes,
+        user_vote: r.user_vote,
+        can_edit: canEdit,
+        can_delete: canDelete,
+        is_pinned: pinnedIds.includes(r.id)
+      };
+    });
+
+    const pinned = messages.filter(m => pinnedIds.includes(m.id));
+
+    res.json({
+      success: true,
+      thread: { id: access.thread.id, type: access.thread.type, ref_id: access.thread.ref_id, title: access.title },
+      permissions: {
+        canRead: access.canRead,
+        canPost: access.canPost,
+        canPin: access.canPin,
+        canAnnounce: access.canAnnounce,
+        canModerate: access.canModerate
+      },
+      ban: activeBan,
+      pinned,
+      messages
+    });
+  } catch (e) {
+    console.error('Error loading chat thread:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.post('/api/chat/threads/:threadId/messages', requireAuth, async (req, res) => {
+  const userId = getUserId(req);
+  const role = req.session.role;
+  const threadId = parseInt(req.params.threadId, 10);
+  const { body, parentId, is_announcement } = req.body || {};
+  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
+  if (!threadId) return res.status(400).json({ success: false, message: 'Invalid thread' });
+  const trimmed = String(body || '').trim();
+  if (!trimmed) return res.status(400).json({ success: false, message: 'Message cannot be empty' });
+
+  try {
+    const access = await getChatThreadAccess(threadId, userId, role);
+    if (!access.ok) return res.status(403).json({ success: false, message: access.error });
+    if (!access.canPost) return res.status(403).json({ success: false, message: 'Posting not allowed' });
+
+    if (parentId) {
+      const [parent] = await pool.query(
+        'SELECT id FROM chat_messages WHERE id = ? AND thread_id = ?',
+        [parentId, threadId]
+      );
+      if (!parent.length) {
+        return res.status(400).json({ success: false, message: 'Invalid parent message' });
+      }
+    }
+
+    const rules = await enforceChatPostingRules(userId, threadId, trimmed);
+    if (!rules.ok) {
+      return res.status(403).json({ success: false, message: rules.error, ban: rules.ban || null });
+    }
+
+    const announcement = access.canAnnounce && !!is_announcement ? 1 : 0;
+
+    const [result] = await pool.query(
+      `INSERT INTO chat_messages (thread_id, parent_id, sender_id, body, is_announcement)
+       VALUES (?, ?, ?, ?, ?)`,
+      [threadId, parentId || null, userId, trimmed, announcement]
+    );
+    await pool.query('UPDATE chat_threads SET last_message_at = NOW() WHERE id = ?', [threadId]);
+    res.json({ success: true, messageId: result.insertId });
+  } catch (e) {
+    console.error('Error posting chat message:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.put('/api/chat/messages/:id', requireAuth, async (req, res) => {
+  const userId = getUserId(req);
+  const role = req.session.role;
+  const messageId = parseInt(req.params.id, 10);
+  const { body } = req.body || {};
+  const trimmed = String(body || '').trim();
+  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
+  if (!messageId) return res.status(400).json({ success: false, message: 'Invalid message' });
+  if (!trimmed) return res.status(400).json({ success: false, message: 'Message cannot be empty' });
+
+  try {
+    const [rows] = await pool.query(
+      `SELECT m.id, m.thread_id, m.sender_id, m.is_deleted, m.created_at
+       FROM chat_messages m WHERE m.id = ?`,
+      [messageId]
+    );
+    if (!rows.length) return res.status(404).json({ success: false, message: 'Message not found' });
+    const msg = rows[0];
+    const access = await getChatThreadAccess(msg.thread_id, userId, role);
+    if (!access.ok) return res.status(403).json({ success: false, message: access.error });
+    if (msg.sender_id !== userId) {
+      return res.status(403).json({ success: false, message: 'Only the author can edit this message' });
+    }
+    if (msg.is_deleted) {
+      return res.status(400).json({ success: false, message: 'Deleted messages cannot be edited' });
+    }
+    const minutesAgo = (Date.now() - new Date(msg.created_at).getTime()) / 60000;
+    if (minutesAgo > CHAT_EDIT_WINDOW_MIN) {
+      return res.status(403).json({ success: false, message: 'Edit window expired' });
+    }
+    await pool.query('UPDATE chat_messages SET body = ?, edited_at = NOW() WHERE id = ?', [trimmed, messageId]);
+    res.json({ success: true, message: 'Message updated' });
+  } catch (e) {
+    console.error('Error editing chat message:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.delete('/api/chat/messages/:id', requireAuth, async (req, res) => {
+  const userId = getUserId(req);
+  const role = req.session.role;
+  const messageId = parseInt(req.params.id, 10);
+  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
+  if (!messageId) return res.status(400).json({ success: false, message: 'Invalid message' });
+
+  try {
+    const [rows] = await pool.query(
+      `SELECT m.id, m.thread_id, m.sender_id, m.is_deleted
+       FROM chat_messages m WHERE m.id = ?`,
+      [messageId]
+    );
+    if (!rows.length) return res.status(404).json({ success: false, message: 'Message not found' });
+    const msg = rows[0];
+    const access = await getChatThreadAccess(msg.thread_id, userId, role);
+    if (!access.ok) return res.status(403).json({ success: false, message: access.error });
+    const canDelete = role === 'admin' || access.canModerate || msg.sender_id === userId;
+    if (!canDelete) return res.status(403).json({ success: false, message: 'Not allowed to delete this message' });
+    if (msg.is_deleted) return res.json({ success: true, message: 'Message already deleted' });
+    await pool.query(
+      `UPDATE chat_messages 
+       SET is_deleted = 1, deleted_at = NOW(), deleted_by = ? 
+       WHERE id = ?`,
+      [userId, messageId]
+    );
+    res.json({ success: true, message: 'Message deleted' });
+  } catch (e) {
+    console.error('Error deleting chat message:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.post('/api/chat/messages/:id/vote', requireAuth, async (req, res) => {
+  const userId = getUserId(req);
+  const role = req.session.role;
+  const messageId = parseInt(req.params.id, 10);
+  const { vote } = req.body || {};
+  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
+  if (!messageId) return res.status(400).json({ success: false, message: 'Invalid message' });
+  const voteVal = vote === 'up' ? 1 : vote === 'down' ? -1 : 0;
+  if (!voteVal) return res.status(400).json({ success: false, message: 'Vote must be up or down' });
+
+  try {
+    const [rows] = await pool.query('SELECT thread_id, is_deleted FROM chat_messages WHERE id = ?', [messageId]);
+    if (!rows.length) return res.status(404).json({ success: false, message: 'Message not found' });
+    if (rows[0].is_deleted) return res.status(400).json({ success: false, message: 'Cannot vote on deleted message' });
+    const access = await getChatThreadAccess(rows[0].thread_id, userId, role);
+    if (!access.ok) return res.status(403).json({ success: false, message: access.error });
+
+    await pool.query(
+      'INSERT INTO chat_votes (message_id, user_id, vote) VALUES (?, ?, ?)',
+      [messageId, userId, voteVal]
+    );
+    res.json({ success: true, message: 'Vote recorded' });
+  } catch (e) {
+    if (e?.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ success: false, message: 'You already voted on this message' });
+    }
+    console.error('Error voting on chat message:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.delete('/api/chat/messages/:id/vote', requireAuth, async (req, res) => {
+  const userId = getUserId(req);
+  const messageId = parseInt(req.params.id, 10);
+  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
+  if (!messageId) return res.status(400).json({ success: false, message: 'Invalid message' });
+  try {
+    await pool.query('DELETE FROM chat_votes WHERE message_id = ? AND user_id = ?', [messageId, userId]);
+    res.json({ success: true, message: 'Vote removed' });
+  } catch (e) {
+    console.error('Error removing vote:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.post('/api/chat/threads/:threadId/pins', requireAuth, async (req, res) => {
+  const userId = getUserId(req);
+  const role = req.session.role;
+  const threadId = parseInt(req.params.threadId, 10);
+  const { messageId } = req.body || {};
+  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
+  if (!threadId || !messageId) return res.status(400).json({ success: false, message: 'Invalid request' });
+  try {
+    const access = await getChatThreadAccess(threadId, userId, role);
+    if (!access.ok) return res.status(403).json({ success: false, message: access.error });
+    if (!access.canPin) return res.status(403).json({ success: false, message: 'Pinning not allowed' });
+
+    const [msg] = await pool.query('SELECT id FROM chat_messages WHERE id = ? AND thread_id = ?', [messageId, threadId]);
+    if (!msg.length) return res.status(404).json({ success: false, message: 'Message not found' });
+
+    await pool.query(
+      'INSERT IGNORE INTO chat_pins (thread_id, message_id, pinned_by) VALUES (?, ?, ?)',
+      [threadId, messageId, userId]
+    );
+    res.json({ success: true, message: 'Message pinned' });
+  } catch (e) {
+    console.error('Error pinning message:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.delete('/api/chat/threads/:threadId/pins/:messageId', requireAuth, async (req, res) => {
+  const userId = getUserId(req);
+  const role = req.session.role;
+  const threadId = parseInt(req.params.threadId, 10);
+  const messageId = parseInt(req.params.messageId, 10);
+  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
+  if (!threadId || !messageId) return res.status(400).json({ success: false, message: 'Invalid request' });
+  try {
+    const access = await getChatThreadAccess(threadId, userId, role);
+    if (!access.ok) return res.status(403).json({ success: false, message: access.error });
+    if (!access.canPin) return res.status(403).json({ success: false, message: 'Unpinning not allowed' });
+
+    await pool.query('DELETE FROM chat_pins WHERE thread_id = ? AND message_id = ?', [threadId, messageId]);
+    res.json({ success: true, message: 'Message unpinned' });
+  } catch (e) {
+    console.error('Error unpinning message:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.get('/api/chat/threads/:threadId/search', requireAuth, async (req, res) => {
+  const userId = getUserId(req);
+  const role = req.session.role;
+  const threadId = parseInt(req.params.threadId, 10);
+  const q = String(req.query.q || '').trim();
+  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
+  if (!threadId) return res.status(400).json({ success: false, message: 'Invalid thread' });
+  if (!q) return res.status(400).json({ success: false, message: 'Search query required' });
+  try {
+    const access = await getChatThreadAccess(threadId, userId, role);
+    if (!access.ok) return res.status(403).json({ success: false, message: access.error });
+
+    const [rows] = await pool.query(
+      `SELECT m.id, m.thread_id, m.parent_id, m.sender_id, m.body, m.is_deleted, m.created_at,
+              u.role as sender_role, u.email as sender_email, up.full_name as sender_name
+       FROM chat_messages m
+       JOIN users u ON u.id = m.sender_id
+       LEFT JOIN user_profiles up ON up.user_id = u.id
+       WHERE m.thread_id = ? AND m.body LIKE ?
+       ORDER BY m.created_at DESC
+       LIMIT 50`,
+      [threadId, `%${q}%`]
+    );
+
+    const results = rows.map(r => {
+      const name = r.sender_name || (r.sender_email ? r.sender_email.split('@')[0] : 'User');
+      let body = r.body;
+      let displayBody = r.body;
+      if (r.is_deleted && role !== 'admin') {
+        body = null;
+        displayBody = 'Message deleted';
+      }
+      return {
+        id: r.id,
+        parent_id: r.parent_id,
+        sender_id: r.sender_id,
+        sender_name: name,
+        sender_role: r.sender_role,
+        body,
+        display_body: displayBody,
+        created_at: r.created_at
+      };
+    });
+
+    res.json({ success: true, results });
+  } catch (e) {
+    console.error('Error searching chat messages:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.delete('/api/chat/threads/:threadId', requireAuth, async (req, res) => {
+  const userId = getUserId(req);
+  const role = req.session.role;
+  const threadId = parseInt(req.params.threadId, 10);
+  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
+  if (!threadId) return res.status(400).json({ success: false, message: 'Invalid thread' });
+  if (role !== 'admin') return res.status(403).json({ success: false, message: 'Admin access required' });
+  try {
+    await pool.query('UPDATE chat_threads SET deleted_at = NOW() WHERE id = ?', [threadId]);
+    res.json({ success: true, message: 'Thread deleted' });
+  } catch (e) {
+    console.error('Error deleting thread:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
 // ==================== ADMIN: USER MANAGEMENT ====================
 
 app.get('/api/admin/users', requireAdmin, async (req, res) => {
@@ -1333,6 +2035,92 @@ app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
     res.json({ success: true, message: 'User deleted' });
   } catch (e) {
     console.error('Error deleting user:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+// ==================== ADMIN: CHAT MODERATION ====================
+
+app.get('/api/admin/chat/bans', requireAdmin, async (req, res) => {
+  const { activeOnly } = req.query;
+  try {
+    let query = `
+      SELECT b.*, u.email, up.full_name
+      FROM user_bans b
+      JOIN users u ON u.id = b.user_id
+      LEFT JOIN user_profiles up ON up.user_id = u.id
+      WHERE b.scope = 'chat'
+    `;
+    const params = [];
+    if (activeOnly !== 'false') {
+      query += ' AND b.revoked_at IS NULL AND (b.end_at IS NULL OR b.end_at > NOW())';
+    }
+    query += ' ORDER BY b.start_at DESC LIMIT 200';
+    const [rows] = await pool.query(query, params);
+    res.json({ success: true, bans: rows });
+  } catch (e) {
+    console.error('Error fetching chat bans:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.post('/api/admin/chat/ban', requireAdmin, async (req, res) => {
+  const { userId, durationHours, reason, permanent } = req.body || {};
+  const targetId = parseInt(userId, 10);
+  if (!targetId) return res.status(400).json({ success: false, message: 'userId required' });
+  const hours = durationHours ? parseInt(durationHours, 10) : null;
+  if (hours !== null && (isNaN(hours) || hours <= 0)) {
+    return res.status(400).json({ success: false, message: 'durationHours must be a positive number' });
+  }
+  try {
+    const [user] = await pool.query('SELECT email FROM users WHERE id = ?', [targetId]);
+    if (!user.length) return res.status(404).json({ success: false, message: 'User not found' });
+
+    let endAt = null;
+    let manualUnban = 0;
+    if (permanent) {
+      manualUnban = 1;
+    } else if (hours) {
+      endAt = new Date(Date.now() + hours * 60 * 60 * 1000);
+    }
+
+    await pool.query(
+      `INSERT INTO user_bans (user_id, scope, reason, offense_count, banned_by, start_at, end_at, manual_unban_required)
+       VALUES (?, 'chat', ?, 0, ?, NOW(), ?, ?)`,
+      [targetId, reason || 'manual_ban', req.session.userId, endAt ? toMySqlDateTimeLocal(endAt) : null, manualUnban]
+    );
+
+    await logAdminAction(req.session.userId, req.session.email, 'chat_ban', 'user', targetId, 
+      { target_email: user[0].email, durationHours: hours, permanent: !!permanent, reason: reason || 'manual_ban' }, getClientIp(req));
+
+    res.json({ success: true, message: 'User banned from chat' });
+  } catch (e) {
+    console.error('Error banning user:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.post('/api/admin/chat/unban', requireAdmin, async (req, res) => {
+  const { userId, reason } = req.body || {};
+  const targetId = parseInt(userId, 10);
+  if (!targetId) return res.status(400).json({ success: false, message: 'userId required' });
+  try {
+    const [user] = await pool.query('SELECT email FROM users WHERE id = ?', [targetId]);
+    if (!user.length) return res.status(404).json({ success: false, message: 'User not found' });
+    const [result] = await pool.query(
+      `UPDATE user_bans 
+       SET revoked_at = NOW(), revoked_by = ? 
+       WHERE user_id = ? AND scope = 'chat' 
+         AND revoked_at IS NULL AND (end_at IS NULL OR end_at > NOW())`,
+      [req.session.userId, targetId]
+    );
+
+    await logAdminAction(req.session.userId, req.session.email, 'chat_unban', 'user', targetId, 
+      { target_email: user[0].email, reason: reason || null, affected: result.affectedRows }, getClientIp(req));
+
+    res.json({ success: true, message: result.affectedRows ? 'User unbanned' : 'No active ban found' });
+  } catch (e) {
+    console.error('Error unbanning user:', e);
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });

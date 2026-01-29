@@ -270,13 +270,54 @@
         </div>
       </section>
 
-      <!-- Messages (placeholder) -->
+      <!-- Messages -->
       <section id="messages" class="section">
         <h1 class="section-title">Messages</h1>
-        <p class="section-desc">One-to-one and group chats</p>
-        <div class="card">
-          <p class="muted">Messages and threads will appear here. Use club or event chats for collaboration.</p>
-          <div id="messageThreads" class="list-compact">No threads yet.</div>
+        <p class="section-desc">Event and club chats</p>
+
+        <div class="chat-layout">
+          <aside class="chat-sidebar">
+            <div class="chat-sidebar-header">
+              <input type="text" id="chatThreadSearch" class="chat-search" placeholder="Search chats">
+              <div class="chat-filters">
+                <button type="button" class="chat-filter active" data-chat-filter="all">All</button>
+                <button type="button" class="chat-filter" data-chat-filter="club">Clubs</button>
+                <button type="button" class="chat-filter" data-chat-filter="event">Events</button>
+              </div>
+            </div>
+            <div id="chatThreads" class="chat-thread-list">Loading…</div>
+          </aside>
+
+          <div class="chat-panel">
+            <div class="chat-panel-header">
+              <div>
+                <h3 id="chatTitle">Select a chat</h3>
+                <p class="muted" id="chatMeta">Choose an event or club thread to get started.</p>
+              </div>
+              <div class="chat-panel-actions" id="chatPanelActions"></div>
+            </div>
+            <div id="chatBanNotice" class="message error" style="display:none"></div>
+            <div id="chatPins" class="chat-pins"></div>
+            <div class="chat-search-row">
+              <input type="text" id="chatMessageSearch" class="chat-search" placeholder="Search messages">
+              <button type="button" class="btn btn-ghost btn-sm" id="chatSearchBtn">Search</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="chatClearSearchBtn">Clear</button>
+            </div>
+            <div id="chatMessages" class="chat-messages">
+              <p class="muted">No chat selected.</p>
+            </div>
+            <form id="chatForm" class="chat-composer">
+              <div id="chatReplyBanner" class="chat-reply-banner" style="display:none"></div>
+              <textarea id="chatInput" rows="3" placeholder="Write a message…"></textarea>
+              <div class="chat-compose-actions">
+                <label class="chat-checkbox" id="chatAnnouncementWrap" style="display:none">
+                  <input type="checkbox" id="chatAnnouncement"> Announcement
+                </label>
+                <span class="muted" id="chatRateHint"></span>
+                <button type="submit" class="btn btn-primary" id="chatSendBtn">Send</button>
+              </div>
+            </form>
+          </div>
         </div>
       </section>
 
