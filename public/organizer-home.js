@@ -761,13 +761,15 @@
       $('modalBody').innerHTML = '<form id="notifyForm" class="form">' +
         '<div class="field"><label>Title</label><input type="text" id="nTitle" value="Update: ' + escapeHtml(event?.title || 'Event') + '" required></div>' +
         '<div class="field"><label>Message</label><textarea id="nMessage" rows="4" required placeholder="Message to send to all registered participants"></textarea></div>' +
+        '<div class="field"><label>Type</label><select id="nType"><option value="general">General</option><option value="upcoming_event">Upcoming event</option><option value="event_approval">Event approval</option></select></div>' +
         '<button type="submit" class="btn btn-primary">Send notification</button></form>';
       $('eventModal').style.display = 'flex';
       $('notifyForm').addEventListener('submit', function (e) {
         e.preventDefault();
-        post('/organizer/events/' + currentEventId + '/notifications', {
+        post('/api/events/' + currentEventId + '/notify', {
           title: $('nTitle').value.trim(),
-          message: $('nMessage').value.trim()
+          message: $('nMessage').value.trim(),
+          type: $('nType').value
         }).then(r => {
           if (r.success) { alert(r.message || 'Notification sent.'); closeModal(); }
           else alert(r.message || 'Failed to send.');

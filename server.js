@@ -1068,10 +1068,6 @@ app.post('/organizer/events/:eventId/notifications', requireOrganizer, async (re
     const { title, message } = req.body;
     const userId = req.session.userId;
 
-    if (req.session.role !== 'organizer') {
-      return res.status(403).json({ success: false, error: 'Organizer access required' });
-    }
-
     if (!title || !message) {
       return res.status(400).json({ success: false, error: 'Title and message required' });
     }
@@ -1130,54 +1126,18 @@ app.post('/organizer/events/:eventId/notifications', requireOrganizer, async (re
     console.error('POST /organizer/events/:eventId/notifications error:', err);
     res.status(500).json({ success: false, error: 'Failed to send notification' });
   }
-  });
-  
-  // GET /participant/notifications
-  app.get('/participant/notifications', requireAuth, async (req, res) => {
-    try {
-      const userId = req.session.userId;
+});
 
-      if (req.session.role !== 'participant') {
-        return res.status(403).json({ success: false, error: 'Participant access required' });
-      }
+// GET /participant/events/:eventId/notifications
+app.get('/participant/events/:eventId/notifications', requireAuth, async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const userId = req.session.userId;
 
-      const [notifications] = await pool.query(
-        `SELECT en.id, en.event_id, e.title as event_title, en.title, en.message, en.created_at,
-                enr.is_read, enr.read_at,
-                u.email as sender_email, up.full_name as sender_name
-         FROM event_notification_recipients enr
-         JOIN event_notifications en ON en.id = enr.notification_id
-         JOIN event_registrations er ON er.event_id = en.event_id
-           AND er.user_id = enr.user_id AND er.status = 'registered'
-         JOIN events e ON e.id = en.event_id
-         LEFT JOIN users u ON en.sender_id = u.id
-         LEFT JOIN user_profiles up ON u.id = up.user_id
-         WHERE enr.user_id = ?
-         ORDER BY en.created_at DESC`,
-        [userId]
-      );
-
-      res.json({ success: true, notifications });
-    } catch (err) {
-      console.error('GET /participant/notifications error:', err);
-      res.status(500).json({ success: false, error: 'Failed to fetch notifications' });
-    }
-  });
-
-  // GET /participant/events/:eventId/notifications
-  app.get('/participant/events/:eventId/notifications', requireAuth, async (req, res) => {
-    try {
-      const { eventId } = req.params;
-      const userId = req.session.userId;
-
-      if (req.session.role !== 'participant') {
-        return res.status(403).json({ success: false, error: 'Participant access required' });
-      }
-
-      // Verify user is registered for the event
-      const [registered] = await pool.query(
-        `SELECT id FROM event_registrations 
-         WHERE event_id = ? AND user_id = ? AND status = 'registered'`,
+    // Verify user is registered for the event
+    const [registered] = await pool.query(
+      `SELECT id FROM event_registrations 
+       WHERE event_id = ? AND user_id = ? AND status = 'registered'`,
       [eventId, userId]
     );
 
@@ -1206,20 +1166,16 @@ app.post('/organizer/events/:eventId/notifications', requireOrganizer, async (re
   }
 });
 
-  // PATCH /participant/notifications/:notificationId/read
-  app.patch('/participant/notifications/:notificationId/read', requireAuth, async (req, res) => {
-    try {
-      const { notificationId } = req.params;
-      const userId = req.session.userId;
+// PATCH /participant/notifications/:notificationId/read
+app.patch('/participant/notifications/:notificationId/read', requireAuth, async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    const userId = req.session.userId;
 
-      if (req.session.role !== 'participant') {
-        return res.status(403).json({ success: false, error: 'Participant access required' });
-      }
-
-      // Verify user is a recipient of this notification
-      const [recipient] = await pool.query(
-        `SELECT id FROM event_notification_recipients 
-         WHERE notification_id = ? AND user_id = ?`,
+    // Verify user is a recipient of this notification
+    const [recipient] = await pool.query(
+      `SELECT id FROM event_notification_recipients 
+       WHERE notification_id = ? AND user_id = ?`,
       [notificationId, userId]
     );
 
