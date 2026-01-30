@@ -106,37 +106,21 @@ const corsOptions = {
   // Otherwise, reflect the request origin (convenient for local development).
   origin: corsOriginEnv
     ? corsOriginEnv.split(',').map(o => o.trim()).filter(Boolean)
-    : (isProduction ? false : true),
+    : true,
   credentials: true
 };
 app.use(cors(corsOptions));
 app.use(express.json());
-
-// Block direct access to protected HTML files in /public (redirect to guarded routes).
-app.use((req, res, next) => {
-  const protectedHtml = ['/admin-home.html', '/organizer-home.html', '/student-home.html'];
-  if (protectedHtml.includes(req.path)) {
-    if (req.path === '/admin-home.html') return res.redirect('/admin-home');
-    if (req.path === '/organizer-home.html') return res.redirect('/organizer-home');
-    if (req.path === '/student-home.html') return res.redirect('/student-home');
-  }
-  next();
-});
-
 app.use(express.static(publicDir));
 
 // Session configuration
-if (isProduction) {
-  app.set('trust proxy', 1);
-}
 app.use(session({
   secret: process.env.SESSION_SECRET || 'campus-hub-secret-key-change-in-production',
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: isProduction,
+    secure: false, // Set to true in production with HTTPS
     httpOnly: true,
-    sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
@@ -144,51 +128,28 @@ app.use(passport.initialize());
 app.use(passport.session());
 
 // Auth middleware
-async function loadActiveSessionUser(req, res) {
+const requireAuth = (req, res, next) => {
   if (!req.session.userId) {
-    res.status(401).json({ error: 'Authentication required' });
-    return null;
+    return res.status(401).json({ error: 'Authentication required' });
   }
-  try {
-    const [rows] = await pool.query(
-      'SELECT id, role, is_active, deleted_at FROM users WHERE id = ?',
-      [req.session.userId]
-    );
-    const user = rows[0];
-    if (!user || !user.is_active || user.deleted_at) {
-      req.session.destroy(() => {});
-      res.status(403).json({ error: 'Account is disabled or deleted' });
-      return null;
-    }
-    // Keep session role in sync with DB for immediate demotion.
-    req.session.role = user.role;
-    return user;
-  } catch (e) {
-    console.error('Auth lookup failed:', e);
-    res.status(500).json({ error: 'Database error' });
-    return null;
-  }
-}
-
-const requireAuth = async (req, res, next) => {
-  const user = await loadActiveSessionUser(req, res);
-  if (!user) return;
   next();
 };
 
-const requireOrganizer = async (req, res, next) => {
-  const user = await loadActiveSessionUser(req, res);
-  if (!user) return;
-  if (user.role !== 'organizer' && user.role !== 'admin') {
+const requireOrganizer = (req, res, next) => {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  if (req.session.role !== 'organizer' && req.session.role !== 'admin') {
     return res.status(403).json({ error: 'Organizer access required' });
   }
   next();
 };
 
-const requireAdmin = async (req, res, next) => {
-  const user = await loadActiveSessionUser(req, res);
-  if (!user) return;
-  if (user.role !== 'admin') {
+const requireAdmin = (req, res, next) => {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  if (req.session.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();
@@ -1030,78 +991,54 @@ app.get('/api/events/my-events', requireOrganizer, async (req, res) => {
   }
 });
 
-  app.post('/api/events/register', requireAuth, async (req, res) => {
-    const uid = getUserId(req);
-    if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
-    const { eventId } = req.body;
-    if (!eventId) return res.status(400).json({ success: false, message: 'eventId required' });
-    try {
-      const registrationsFrozen = await getSetting('registrations_frozen');
-      if (registrationsFrozen) {
-        return res.status(403).json({ success: false, message: 'Event registrations are currently frozen' });
-      }
-      const conn = await pool.getConnection();
-      try {
-        await conn.beginTransaction();
-        const [events] = await conn.query(
-          'SELECT status, registration_deadline, max_participants FROM events WHERE id = ? FOR UPDATE',
-          [eventId]
-        );
-        if (!events.length) {
-          await conn.rollback();
-          return res.status(404).json({ success: false, message: 'Event not found' });
-        }
-        if (events[0].status !== 'published') {
-          await conn.rollback();
-          return res.status(403).json({ success: false, message: 'Registrations are closed for this event' });
-        }
-        const [existing] = await conn.query(
-          'SELECT status FROM event_registrations WHERE event_id = ? AND user_id = ? FOR UPDATE',
-          [eventId, uid]
-        );
-        if (existing.length && existing[0].status !== 'cancelled') {
-          await conn.rollback();
-          return res.json({ success: true, message: 'Already registered' });
-        }
-        if (events[0].registration_deadline) {
-          const deadline = parseLocalDateTime(events[0].registration_deadline);
-          if (deadline && deadline.getTime() < Date.now()) {
-            await conn.rollback();
-            return res.status(403).json({ success: false, message: 'Registration deadline has passed' });
-          }
-        }
-        const maxParticipants = parseInt(events[0].max_participants, 10);
-        if (!isNaN(maxParticipants) && maxParticipants > 0) {
-          const [countRows] = await conn.query(
-            'SELECT COUNT(*) as c FROM event_registrations WHERE event_id = ? AND status != ? FOR UPDATE',
-            [eventId, 'cancelled']
-          );
-          if (countRows[0].c >= maxParticipants) {
-            await conn.rollback();
-            return res.status(409).json({ success: false, message: 'Event is full' });
-          }
-        }
-        if (existing.length && existing[0].status === 'cancelled') {
-          await conn.query(
-            'UPDATE event_registrations SET status = ?, registered_at = NOW() WHERE event_id = ? AND user_id = ?',
-            ['registered', eventId, uid]
-          );
-          await conn.commit();
-          return res.json({ success: true, message: 'Registration restored' });
-        }
-        await conn.query('INSERT IGNORE INTO event_registrations (event_id, user_id) VALUES (?, ?)', [eventId, uid]);
-        await conn.commit();
-        res.json({ success: true, message: 'Registered for event' });
-      } catch (inner) {
-        try { await conn.rollback(); } catch (_) {}
-        throw inner;
-      } finally {
-        conn.release();
-      }
-    } catch (e) {
-      res.status(500).json({ success: false, message: 'Database error' });
+app.post('/api/events/register', requireAuth, async (req, res) => {
+  const uid = getUserId(req);
+  if (!uid) return res.status(401).json({ success: false, message: 'User ID required' });
+  const { eventId } = req.body;
+  if (!eventId) return res.status(400).json({ success: false, message: 'eventId required' });
+  try {
+    const registrationsFrozen = await getSetting('registrations_frozen');
+    if (registrationsFrozen) {
+      return res.status(403).json({ success: false, message: 'Event registrations are currently frozen' });
     }
-  });
+    const [events] = await pool.query('SELECT status, registration_deadline, max_participants FROM events WHERE id = ?', [eventId]);
+    if (!events.length) return res.status(404).json({ success: false, message: 'Event not found' });
+    if (events[0].status !== 'published') {
+      return res.status(403).json({ success: false, message: 'Registrations are closed for this event' });
+    }
+    const [existing] = await pool.query('SELECT status FROM event_registrations WHERE event_id = ? AND user_id = ?', [eventId, uid]);
+    if (existing.length && existing[0].status !== 'cancelled') {
+      return res.json({ success: true, message: 'Already registered' });
+    }
+    if (events[0].registration_deadline) {
+      const deadline = parseLocalDateTime(events[0].registration_deadline);
+      if (deadline && deadline.getTime() < Date.now()) {
+        return res.status(403).json({ success: false, message: 'Registration deadline has passed' });
+      }
+    }
+    const maxParticipants = parseInt(events[0].max_participants, 10);
+    if (!isNaN(maxParticipants) && maxParticipants > 0) {
+      const [countRows] = await pool.query(
+        'SELECT COUNT(*) as c FROM event_registrations WHERE event_id = ? AND status != ?',
+        [eventId, 'cancelled']
+      );
+      if (countRows[0].c >= maxParticipants) {
+        return res.status(409).json({ success: false, message: 'Event is full' });
+      }
+    }
+    if (existing.length && existing[0].status === 'cancelled') {
+      await pool.query(
+        'UPDATE event_registrations SET status = ?, registered_at = NOW() WHERE event_id = ? AND user_id = ?',
+        ['registered', eventId, uid]
+      );
+      return res.json({ success: true, message: 'Registration restored' });
+    }
+    await pool.query('INSERT IGNORE INTO event_registrations (event_id, user_id) VALUES (?, ?)', [eventId, uid]);
+    res.json({ success: true, message: 'Registered for event' });
+  } catch (e) {
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
 
 // ==================== ORGANIZER: EVENT MANAGEMENT ====================
 
@@ -2245,32 +2182,11 @@ app.post('/api/chat/messages/:id/vote', requireAuth, async (req, res) => {
       [messageId, userId, voteVal]
     );
     res.json({ success: true, message: 'Vote recorded', vote: voteVal });
-    } catch (e) {
-      if (e?.code === 'ER_DUP_ENTRY') {
-        try {
-          const [existing] = await pool.query(
-            'SELECT vote FROM chat_votes WHERE message_id = ? AND user_id = ?',
-            [messageId, userId]
-          );
-          if (existing.length) {
-            if (existing[0].vote === voteVal) {
-              await pool.query('DELETE FROM chat_votes WHERE message_id = ? AND user_id = ?', [messageId, userId]);
-              return res.json({ success: true, message: 'Vote removed', vote: 0 });
-            }
-            await pool.query(
-              'UPDATE chat_votes SET vote = ? WHERE message_id = ? AND user_id = ?',
-              [voteVal, messageId, userId]
-            );
-            return res.json({ success: true, message: 'Vote updated', vote: voteVal });
-          }
-        } catch (inner) {
-          console.error('Error resolving duplicate vote:', inner);
-        }
-      }
-      console.error('Error voting on chat message:', e);
-      res.status(500).json({ success: false, message: 'Database error' });
-    }
-  });
+  } catch (e) {
+    console.error('Error voting on chat message:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
 
 app.delete('/api/chat/messages/:id/vote', requireAuth, async (req, res) => {
   const userId = getUserId(req);

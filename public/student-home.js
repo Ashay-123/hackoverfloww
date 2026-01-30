@@ -260,7 +260,7 @@
         const maxParts = e.max_participants === 0 ? 'Unlimited' : e.max_participants + ' spots';
         const status = e.status || 'published';
         const deadlineText = e.registration_deadline ? '<div><strong>Registration Deadline:</strong> ' + formatDateTime(e.registration_deadline) + '</div>' : '';
-        const deadline = e.registration_deadline ? parseDateValue(e.registration_deadline) : null;
+        const deadline = e.registration_deadline ? new Date(e.registration_deadline) : null;
         const deadlinePassed = deadline && deadline.getTime() < Date.now();
         const isClosed = status === 'closed';
         const regStatus = e.reg_status || null;
