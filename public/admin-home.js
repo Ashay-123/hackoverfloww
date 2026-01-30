@@ -672,7 +672,9 @@
     ban: null,
     searchMode: false,
     threadMeta: null,
-    selectedMessage: null
+    selectedMessage: null,
+    messageSignatures: null,
+    pinnedSignature: ''
   };
 
   function roleLabel(role) {
@@ -707,6 +709,8 @@
     if (actions) actions.innerHTML = '';
     const searchRow = document.querySelector('.chat-search-row');
     if (searchRow) searchRow.style.display = 'none';
+    chatState.messageSignatures = null;
+    chatState.pinnedSignature = '';
     setSelectedMessage(null);
     showChatComposer(false);
   }
@@ -827,6 +831,243 @@
     </div>`;
   }
 
+  function buildMessageSignature(msg) {
+    return [
+      msg.id,
+      msg.parent_id || 0,
+      msg.display_body || '',
+      msg.is_deleted ? 1 : 0,
+      msg.is_announcement ? 1 : 0,
+      msg.is_pinned ? 1 : 0,
+      msg.upvotes || 0,
+      msg.downvotes || 0,
+      msg.user_vote || 0,
+      msg.edited_at || '',
+      msg.deleted_at || '',
+      msg.sender_role || '',
+      msg.sender_name || ''
+    ].join('|');
+  }
+
+  function computeReplyCounts(messages) {
+    const counts = {};
+    messages.forEach(msg => {
+      if (msg.parent_id) {
+        counts[msg.parent_id] = (counts[msg.parent_id] || 0) + 1;
+      }
+    });
+    return counts;
+  }
+
+  function buildMessageHeaderHtml(msg) {
+    const role = msg.sender_role || 'participant';
+    const roleClass = role === 'admin' ? 'admin' : role === 'organizer' ? 'organizer' : 'participant';
+    const badges = [];
+    if (msg.is_pinned) badges.push('<span class="role-badge pin">Pinned</span>');
+    if (msg.is_announcement) badges.push('<span class="role-badge announce">Announcement</span>');
+    const edited = msg.edited_at ? ' • edited' : '';
+    return `
+      <span class="chat-name">${escapeHtml(msg.sender_name || 'User')}</span>
+      <span class="role-badge ${roleClass}">${roleLabel(role)}</span>
+      ${badges.join('')}
+      <span class="chat-meta">${formatDateTime(msg.created_at)}${edited}</span>
+    `;
+  }
+
+  function buildMessageActionsHtml(msg) {
+    const canPost = chatState.permissions.canPost && !chatState.ban;
+    const canPin = chatState.permissions.canPin;
+    const voteUpActive = msg.user_vote === 1 ? 'active' : '';
+    const voteDownActive = msg.user_vote === -1 ? 'active' : '';
+    const actions = [];
+
+    actions.push(`<button type="button" class="vote-btn ${voteUpActive}" data-vote="up" data-message-id="${msg.id}">▲ ${msg.upvotes || 0}</button>`);
+    actions.push(`<button type="button" class="vote-btn ${voteDownActive}" data-vote="down" data-message-id="${msg.id}">▼ ${msg.downvotes || 0}</button>`);
+
+    if (canPost && !msg.is_deleted) {
+      actions.push(`<button type="button" class="btn btn-ghost btn-sm" data-reply="${msg.id}">Reply</button>`);
+    }
+    if (msg.can_edit) {
+      actions.push(`<button type="button" class="btn btn-ghost btn-sm" data-edit="${msg.id}">Edit</button>`);
+    }
+    if (msg.can_delete) {
+      actions.push(`<button type="button" class="btn btn-ghost btn-sm" data-delete="${msg.id}">Delete</button>`);
+    }
+    if (canPin && !msg.is_deleted) {
+      actions.push(msg.is_pinned
+        ? `<button type="button" class="btn btn-ghost btn-sm" data-unpin="${msg.id}">Unpin</button>`
+        : `<button type="button" class="btn btn-ghost btn-sm" data-pin="${msg.id}">Pin</button>`);
+    }
+    if (!msg.is_deleted) {
+      actions.push(`<button type="button" class="btn btn-danger btn-sm" data-ban="${msg.sender_id}">Ban user</button>`);
+    }
+    return actions.join('');
+  }
+
+  function updateReplyToggle(messageEl, replyCount) {
+    if (!messageEl) return;
+    const repliesEl = messageEl.querySelector('.chat-replies');
+    const toggle = messageEl.querySelector('.chat-toggle');
+    if (!replyCount) {
+      if (toggle) toggle.remove();
+      return;
+    }
+    const label = repliesEl && repliesEl.style.display === 'none' ? 'Expand' : 'Collapse';
+    const text = `${label} ${replyCount} repl${replyCount > 1 ? 'ies' : 'y'}`;
+    if (toggle) {
+      toggle.textContent = text;
+      return;
+    }
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chat-toggle';
+    btn.dataset.toggleReplies = messageEl.dataset.message;
+    btn.textContent = text;
+    const actions = messageEl.querySelector('.chat-actions');
+    if (actions) {
+      messageEl.insertBefore(btn, actions);
+    } else {
+      messageEl.appendChild(btn);
+    }
+  }
+
+  function updateMessageElement(messageEl, msg, replyCount) {
+    if (!messageEl) return;
+    const role = msg.sender_role || 'participant';
+    const highlight = role === 'admin' ? 'chat-message--admin' : role === 'organizer' ? 'chat-message--organizer' : '';
+    const deletedClass = msg.is_deleted ? 'chat-message--deleted' : '';
+    messageEl.className = `chat-message ${highlight} ${deletedClass}`.trim();
+
+    let header = messageEl.querySelector('.chat-header-line');
+    if (!header) {
+      header = document.createElement('div');
+      header.className = 'chat-header-line';
+      messageEl.prepend(header);
+    }
+    header.innerHTML = buildMessageHeaderHtml(msg);
+
+    let body = messageEl.querySelector('.chat-body');
+    if (!body) {
+      body = document.createElement('div');
+      body.className = 'chat-body';
+      messageEl.appendChild(body);
+    }
+    body.innerHTML = formatMessageBody(msg.display_body || '');
+
+    let actions = messageEl.querySelector('.chat-actions');
+    if (!actions) {
+      actions = document.createElement('div');
+      actions.className = 'chat-actions';
+      messageEl.appendChild(actions);
+    }
+    actions.innerHTML = buildMessageActionsHtml(msg);
+
+    if (replyCount > 0 && !messageEl.querySelector('.chat-replies')) {
+      const repliesWrap = document.createElement('div');
+      repliesWrap.className = 'chat-replies';
+      repliesWrap.dataset.repliesFor = msg.id;
+      messageEl.appendChild(repliesWrap);
+    }
+    updateReplyToggle(messageEl, replyCount || 0);
+  }
+
+  function htmlToElement(html) {
+    const temp = document.createElement('div');
+    temp.innerHTML = html.trim();
+    return temp.firstElementChild;
+  }
+
+  function insertMessageElement(msg, replyCounts) {
+    const container = $('chatMessages');
+    if (!container) return;
+    let target = container;
+    if (msg.parent_id) {
+      const parentEl = container.querySelector(`.chat-message[data-message="${msg.parent_id}"]`);
+      if (parentEl) {
+        let repliesEl = parentEl.querySelector(`.chat-replies[data-replies-for="${msg.parent_id}"]`);
+        if (!repliesEl) {
+          repliesEl = document.createElement('div');
+          repliesEl.className = 'chat-replies';
+          repliesEl.dataset.repliesFor = msg.parent_id;
+          parentEl.appendChild(repliesEl);
+        }
+        updateReplyToggle(parentEl, replyCounts[msg.parent_id] || 0);
+        target = repliesEl;
+      }
+    }
+    target.appendChild(htmlToElement(renderMessageNode(msg)));
+  }
+
+  function syncPinnedMessages(pinned) {
+    const sig = (pinned || []).map(buildMessageSignature).join('|');
+    if (sig === chatState.pinnedSignature) return;
+    renderPinnedMessages(pinned || []);
+    chatState.pinnedSignature = sig;
+  }
+
+  function isNearBottom(el) {
+    if (!el) return false;
+    return (el.scrollHeight - el.scrollTop - el.clientHeight) < 120;
+  }
+
+  function syncChatMessages(nextMessages, options = {}) {
+    const el = $('chatMessages');
+    if (!el) return;
+    const force = options.force || !chatState.messageSignatures;
+    if (!nextMessages || nextMessages.length === 0) {
+      el.innerHTML = '<p class="muted">No messages yet.</p>';
+      chatState.messageSignatures = new Map();
+      return;
+    }
+    if (force) {
+      renderChatMessages(nextMessages);
+      const map = new Map();
+      nextMessages.forEach(msg => map.set(msg.id, buildMessageSignature(msg)));
+      chatState.messageSignatures = map;
+      return;
+    }
+
+    const replyCounts = computeReplyCounts(nextMessages);
+    const nextMap = new Map();
+    const added = [];
+    const changed = [];
+    nextMessages.forEach(msg => {
+      const sig = buildMessageSignature(msg);
+      nextMap.set(msg.id, sig);
+      const prev = chatState.messageSignatures.get(msg.id);
+      if (!prev) added.push(msg);
+      else if (prev !== sig) changed.push(msg);
+    });
+    const removed = [];
+    chatState.messageSignatures.forEach((_, id) => {
+      if (!nextMap.has(id)) removed.push(id);
+    });
+
+    if (!added.length && !changed.length && !removed.length) {
+      return;
+    }
+
+    const autoScroll = options.autoScroll || isNearBottom(el);
+
+    removed.forEach(id => {
+      el.querySelector(`.chat-message[data-message="${id}"]`)?.remove();
+    });
+
+    changed.forEach(msg => {
+      const node = el.querySelector(`.chat-message[data-message="${msg.id}"]`);
+      if (node) updateMessageElement(node, msg, replyCounts[msg.id] || 0);
+    });
+
+    added.forEach(msg => insertMessageElement(msg, replyCounts));
+
+    chatState.messageSignatures = nextMap;
+    wireChatMessageActions();
+
+    if (autoScroll) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }
+
   function renderChatMessages(messages) {
     const el = $('chatMessages');
     if (!el) return;
@@ -911,6 +1152,8 @@
     chatState.searchMode = false;
     clearReply();
     setSelectedMessage(null);
+    chatState.messageSignatures = null;
+    chatState.pinnedSignature = '';
     renderChatThreads();
     loadChatThread(threadId);
   }
@@ -931,15 +1174,17 @@
     }
   }
 
-  async function loadChatThread(threadId) {
+  async function loadChatThread(threadId, options = {}) {
     if (!threadId) return;
     const el = $('chatMessages');
-    if (el) el.innerHTML = '<p class="muted">Loading messages…</p>';
+    const silent = options.silent === true;
+    const forceScroll = options.forceScroll === true;
+    if (el && !silent) el.innerHTML = '<p class="muted">Loading messages…</p>';
     try {
       const r = await get('/api/chats/' + threadId + '/messages');
       if (!r.success) {
-        if (el) el.innerHTML = `<p class="muted">${escapeHtml(r.message || 'Could not load messages.')}</p>`;
-        showChatComposer(false);
+        if (el && !silent) el.innerHTML = `<p class="muted">${escapeHtml(r.message || 'Could not load messages.')}</p>`;
+        if (!silent) showChatComposer(false);
         return;
       }
       chatState.permissions = r.permissions || {};
@@ -1015,14 +1260,13 @@
         });
       }
 
-      renderPinnedMessages(chatState.pinned);
-      renderChatMessages(chatState.messages);
-
-      if (el) {
-        el.scrollTop = el.scrollHeight;
-      }
+      syncPinnedMessages(chatState.pinned);
+      syncChatMessages(chatState.messages, {
+        force: !chatState.messageSignatures,
+        autoScroll: forceScroll || !silent
+      });
     } catch (e) {
-      if (el) el.innerHTML = '<p class="muted">Could not load messages.</p>';
+      if (el && !silent) el.innerHTML = '<p class="muted">Could not load messages.</p>';
     }
   }
 
@@ -1059,14 +1303,14 @@
       if (!res.success) {
         alert(res.message || 'Failed to send message.');
         if (res.ban) {
-          loadChatThread(chatState.activeThreadId);
+          loadChatThread(chatState.activeThreadId, { silent: true });
         }
         return;
       }
       input.value = '';
       $('chatAnnouncement').checked = false;
       clearReply();
-      loadChatThread(chatState.activeThreadId);
+      loadChatThread(chatState.activeThreadId, { silent: true, forceScroll: true });
     } catch (_) {
       alert('Request failed.');
     }
@@ -1101,6 +1345,8 @@
     const container = $('chatMessages');
     if (!container) return;
     container.querySelectorAll('[data-vote]').forEach(btn => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
       btn.addEventListener('click', async () => {
         const vote = btn.dataset.vote;
         const messageId = parseInt(btn.dataset.messageId, 10);
@@ -1109,11 +1355,13 @@
         if (!res.success) {
           alert(res.message || 'Could not vote.');
         }
-        loadChatThread(chatState.activeThreadId);
+        loadChatThread(chatState.activeThreadId, { silent: true });
       });
     });
 
     container.querySelectorAll('[data-reply]').forEach(btn => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
       btn.addEventListener('click', () => {
         const messageId = parseInt(btn.dataset.reply, 10);
         const msg = chatState.messages.find(m => m.id === messageId);
@@ -1125,6 +1373,8 @@
     });
 
     container.querySelectorAll('[data-edit]').forEach(btn => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
       btn.addEventListener('click', async () => {
         const messageId = parseInt(btn.dataset.edit, 10);
         const msg = chatState.messages.find(m => m.id === messageId);
@@ -1135,11 +1385,13 @@
         if (!res.success) {
           alert(res.message || 'Could not edit message.');
         }
-        loadChatThread(chatState.activeThreadId);
+        loadChatThread(chatState.activeThreadId, { silent: true });
       });
     });
 
     container.querySelectorAll('[data-delete]').forEach(btn => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
       btn.addEventListener('click', async () => {
         const messageId = parseInt(btn.dataset.delete, 10);
         if (!messageId) return;
@@ -1148,31 +1400,37 @@
         if (!res.success) {
           alert(res.message || 'Could not delete message.');
         }
-        loadChatThread(chatState.activeThreadId);
+        loadChatThread(chatState.activeThreadId, { silent: true });
       });
     });
 
     container.querySelectorAll('[data-pin]').forEach(btn => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
       btn.addEventListener('click', async () => {
         const messageId = parseInt(btn.dataset.pin, 10);
         if (!messageId) return;
         const res = await post(`/api/chat/threads/${chatState.activeThreadId}/pins`, { messageId });
         if (!res.success) alert(res.message || 'Could not pin.');
-        loadChatThread(chatState.activeThreadId);
+        loadChatThread(chatState.activeThreadId, { silent: true });
       });
     });
 
     container.querySelectorAll('[data-unpin]').forEach(btn => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
       btn.addEventListener('click', async () => {
         const messageId = parseInt(btn.dataset.unpin, 10);
         if (!messageId) return;
         const res = await del(`/api/chat/threads/${chatState.activeThreadId}/pins/${messageId}`);
         if (!res.success) alert(res.message || 'Could not unpin.');
-        loadChatThread(chatState.activeThreadId);
+        loadChatThread(chatState.activeThreadId, { silent: true });
       });
     });
 
     container.querySelectorAll('[data-ban]').forEach(btn => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
       btn.addEventListener('click', async () => {
         const userId = parseInt(btn.dataset.ban, 10);
         await banUser(userId);
@@ -1180,6 +1438,8 @@
     });
 
     container.querySelectorAll('[data-toggle-replies]').forEach(btn => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
       btn.addEventListener('click', () => {
         const id = btn.dataset.toggleReplies;
         const replies = container.querySelector(`[data-replies-for="${id}"]`);
@@ -1191,6 +1451,8 @@
     });
 
     container.querySelectorAll('.chat-message').forEach(msgEl => {
+      if (msgEl.dataset.selectWired) return;
+      msgEl.dataset.selectWired = '1';
       msgEl.addEventListener('click', (e) => {
         if (e.target.closest('button')) return;
         const id = parseInt(msgEl.dataset.message, 10);
@@ -1210,6 +1472,7 @@
       return;
     }
     chatState.searchMode = true;
+    chatState.messageSignatures = null;
     const results = (res.results || []).map(r => ({
       id: r.id,
       parent_id: r.parent_id,
@@ -1369,7 +1632,7 @@
         return;
       }
       setSelectedMessage(null);
-      loadChatThread(chatState.activeThreadId);
+      loadChatThread(chatState.activeThreadId, { silent: true });
     });
 
     $('chatBanUser')?.addEventListener('click', async () => {
@@ -1444,7 +1707,7 @@
     loadBannedWords();
     setInterval(() => {
       if (chatState.activeThreadId && !chatState.searchMode) {
-        loadChatThread(chatState.activeThreadId);
+        loadChatThread(chatState.activeThreadId, { silent: true });
       }
     }, 15000);
     setInterval(() => {

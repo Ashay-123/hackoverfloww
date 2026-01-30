@@ -455,7 +455,55 @@ input:checked + .slider:before {
 
 /* ===== Chat Moderation ===== */
 .chat-layout-admin {
-  grid-template-columns: 240px 1fr 320px;
+  grid-template-columns: 260px minmax(560px, 2fr) minmax(280px, 1fr);
+  gap: 20px;
+}
+
+.chat-layout-admin .chat-panel {
+  min-width: 560px;
+}
+
+.chat-layout-admin .chat-messages {
+  padding: 8px 0;
+}
+
+.chat-layout-admin .chat-message {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-bottom: none;
+  border-radius: 12px;
+  margin-bottom: 10px;
+  padding: 16px 18px;
+}
+
+.chat-layout-admin .chat-message:last-child {
+  margin-bottom: 0;
+}
+
+.chat-layout-admin .chat-message--admin {
+  border-left: 3px solid rgba(248,113,113,0.6);
+}
+
+.chat-layout-admin .chat-message--organizer {
+  border-left: 3px solid rgba(251,191,36,0.6);
+}
+
+.chat-layout-admin .chat-message--deleted {
+  padding: 10px 16px;
+}
+
+.chat-layout-admin .chat-header-line {
+  margin-bottom: 6px;
+}
+
+.chat-layout-admin .chat-body {
+  margin-top: 2px;
+}
+
+.chat-layout-admin .chat-actions {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.06);
 }
 
 .chat-moderation {
@@ -501,6 +549,15 @@ input:checked + .slider:before {
 
 /* Responsive */
 @media (max-width: 900px) {
+  .chat-layout-admin {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .chat-layout-admin .chat-panel {
+    min-width: 0;
+  }
+
   .stats-grid {
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   }
