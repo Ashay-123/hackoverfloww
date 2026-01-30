@@ -99,6 +99,11 @@
     return d.innerHTML;
   }
 
+  function maskBannedWord(word) {
+    if (!word) return '';
+    return String(word).replace(/[A-Za-z0-9]/g, '*');
+  }
+
   function formatDate(s) {
     if (!s) return '—';
     try {
@@ -499,6 +504,95 @@
   $('refreshEvents')?.addEventListener('click', loadEvents);
   $('eventSearch')?.addEventListener('input', debounce(loadEvents, 500));
   $('eventStatusFilter')?.addEventListener('change', loadEvents);
+
+  // ===== Resource Approvals =====
+  async function loadResourceBookings() {
+    const list = $('resourceBookingsList');
+    if (list) list.innerHTML = '<p class="muted">Loading bookings...</p>';
+    const search = $('resourceSearch')?.value.trim();
+    const status = $('resourceStatusFilter')?.value;
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (status) params.append('status', status);
+
+    try {
+      const res = await get('/api/admin/resource-bookings?' + params.toString());
+      if (res.success) {
+        renderResourceBookings(res.bookings || []);
+      } else if (list) {
+        list.innerHTML = '<p class="muted">Could not load bookings.</p>';
+      }
+    } catch (e) {
+      console.error('Error loading resource bookings:', e);
+      if (list) list.innerHTML = '<p class="muted">Could not load bookings.</p>';
+    }
+  }
+
+  function renderResourceBookings(bookings) {
+    const list = $('resourceBookingsList');
+    if (!list) return;
+    if (!bookings.length) {
+      list.innerHTML = '<p class="muted">No booking requests found.</p>';
+      return;
+    }
+    list.innerHTML = bookings.map(b => {
+      const status = b.status || 'pending';
+      const statusClass = status === 'approved' ? 'active' : status;
+      const statusLabel = `<span class="status ${statusClass}">${status}</span>`;
+      const userLabel = b.user_name || b.user_email || 'User';
+      const timeRange = `${formatDateTime(b.start_datetime)} – ${formatDateTime(b.end_datetime)}`;
+      const actions = status === 'pending'
+        ? `<div class="event-card-actions">
+             <button type="button" class="btn btn-primary" data-approve-booking="${b.id}">Approve</button>
+             <button type="button" class="btn btn-danger" data-reject-booking="${b.id}">Reject</button>
+           </div>`
+        : `<div class="event-card-actions">
+             ${statusLabel}
+           </div>`;
+      return `<div class="event-card">
+        <div class="event-card-header">
+          <h4>${escapeHtml(b.resource_name || 'Resource')}</h4>
+          ${statusLabel}
+        </div>
+        <p class="muted">${escapeHtml(b.category || '')}</p>
+        <div class="event-card-meta">
+          <div><strong>Requested by:</strong> ${escapeHtml(userLabel)}</div>
+          <div><strong>Time:</strong> ${escapeHtml(timeRange)}</div>
+          ${b.purpose ? `<div><strong>Purpose:</strong> ${escapeHtml(b.purpose)}</div>` : ''}
+        </div>
+        ${actions}
+      </div>`;
+    }).join('');
+
+    list.querySelectorAll('[data-approve-booking]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = parseInt(btn.dataset.approveBooking, 10);
+        if (!id) return;
+        const res = await put(`/api/admin/resource-bookings/${id}/approve`, {});
+        if (!res.success) {
+          alert(res.message || 'Approval failed.');
+        }
+        loadResourceBookings();
+      });
+    });
+
+    list.querySelectorAll('[data-reject-booking]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = parseInt(btn.dataset.rejectBooking, 10);
+        if (!id) return;
+        if (!confirm('Reject this booking request?')) return;
+        const res = await put(`/api/admin/resource-bookings/${id}/reject`, {});
+        if (!res.success) {
+          alert(res.message || 'Rejection failed.');
+        }
+        loadResourceBookings();
+      });
+    });
+  }
+
+  $('refreshResources')?.addEventListener('click', loadResourceBookings);
+  $('resourceSearch')?.addEventListener('input', debounce(loadResourceBookings, 500));
+  $('resourceStatusFilter')?.addEventListener('change', loadResourceBookings);
 
   // ===== Settings =====
   async function loadSettings() {
@@ -1566,7 +1660,7 @@
       }
       el.innerHTML = words.map(w => `
         <div class="item-row">
-          <div><h4>${escapeHtml(w.word)}</h4></div>
+          <div><h4>${escapeHtml(maskBannedWord(w.word))}</h4></div>
           <button type="button" class="btn btn-ghost btn-sm" data-remove-word="${w.id}">Remove</button>
         </div>
       `).join('');
@@ -1699,6 +1793,7 @@
     loadDashboard();
     loadUsers();
     loadEvents();
+    loadResourceBookings();
     loadSettings();
     loadLogs();
     initChatUi();

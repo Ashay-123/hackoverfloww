@@ -1428,13 +1428,127 @@ app.post('/api/resources/book', requireAuth, async (req, res) => {
     if (overlap[0].c > 0) {
       return res.status(409).json({ success: false, message: 'Resource is already booked for that time' });
     }
-    const status = r[0].requires_approval ? 'pending' : 'approved';
+    const status = 'pending';
     const [ins] = await pool.query(
       'INSERT INTO resource_bookings (resource_id, user_id, start_datetime, end_datetime, status, purpose) VALUES (?, ?, ?, ?, ?, ?)',
       [resourceId, uid, start_datetime, end_datetime, status, purpose || '']
     );
-    res.json({ success: true, bookingId: ins.insertId, status, message: status === 'approved' ? 'Booking confirmed' : 'Booking pending approval' });
+    res.json({ success: true, bookingId: ins.insertId, status, message: 'Booking pending approval' });
   } catch (e) {
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+// ==================== ADMIN: RESOURCE APPROVALS ====================
+
+app.get('/api/admin/resource-bookings', requireAdmin, async (req, res) => {
+  const { status, search } = req.query;
+  try {
+    let query = `
+      SELECT rb.id, rb.resource_id, rb.user_id, rb.start_datetime, rb.end_datetime, rb.status, rb.purpose, rb.created_at,
+             r.name AS resource_name, r.category,
+             u.email AS user_email, up.full_name AS user_name
+      FROM resource_bookings rb
+      JOIN resources r ON r.id = rb.resource_id
+      JOIN users u ON u.id = rb.user_id
+      LEFT JOIN user_profiles up ON up.user_id = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+    if (status) {
+      query += ' AND rb.status = ?';
+      params.push(status);
+    }
+    if (search) {
+      query += ' AND (r.name LIKE ? OR u.email LIKE ? OR up.full_name LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+    query += ' ORDER BY rb.created_at DESC LIMIT 200';
+    const [rows] = await pool.query(query, params);
+    res.json({ success: true, bookings: rows });
+  } catch (e) {
+    console.error('Error fetching resource bookings:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.put('/api/admin/resource-bookings/:id/approve', requireAdmin, async (req, res) => {
+  const bookingId = parseInt(req.params.id, 10);
+  try {
+    const [rows] = await pool.query(
+      `SELECT rb.id, rb.resource_id, rb.user_id, rb.start_datetime, rb.end_datetime, rb.status,
+              r.name as resource_name
+       FROM resource_bookings rb
+       JOIN resources r ON r.id = rb.resource_id
+       WHERE rb.id = ?`,
+      [bookingId]
+    );
+    if (!rows.length) return res.status(404).json({ success: false, message: 'Booking not found' });
+    const booking = rows[0];
+    if (booking.status === 'approved') {
+      return res.json({ success: true, message: 'Booking already approved' });
+    }
+    if (booking.status === 'rejected' || booking.status === 'cancelled') {
+      return res.status(400).json({ success: false, message: 'Cannot approve a rejected/cancelled booking' });
+    }
+
+    const [overlap] = await pool.query(
+      `SELECT COUNT(*) as c
+       FROM resource_bookings
+       WHERE resource_id = ?
+         AND status = 'approved'
+         AND id <> ?
+         AND NOT (end_datetime <= ? OR start_datetime >= ?)`,
+      [booking.resource_id, bookingId, booking.start_datetime, booking.end_datetime]
+    );
+    if (overlap[0].c > 0) {
+      return res.status(409).json({ success: false, message: 'Resource is already booked for that time' });
+    }
+
+    await pool.query(
+      'UPDATE resource_bookings SET status = ?, approved_by = ?, updated_at = NOW() WHERE id = ?',
+      ['approved', req.session.userId, bookingId]
+    );
+    await pool.query(
+      'INSERT INTO notifications (user_id, title, message, type, ref_type, ref_id) VALUES (?, ?, ?, ?, ?, ?)',
+      [booking.user_id, 'Resource Booking Approved', `Your booking for "${booking.resource_name}" was approved.`, 'booking_approved', 'booking', bookingId]
+    );
+    res.json({ success: true, message: 'Booking approved' });
+  } catch (e) {
+    console.error('Error approving resource booking:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.put('/api/admin/resource-bookings/:id/reject', requireAdmin, async (req, res) => {
+  const bookingId = parseInt(req.params.id, 10);
+  try {
+    const [rows] = await pool.query(
+      `SELECT rb.id, rb.user_id, rb.status, r.name as resource_name
+       FROM resource_bookings rb
+       JOIN resources r ON r.id = rb.resource_id
+       WHERE rb.id = ?`,
+      [bookingId]
+    );
+    if (!rows.length) return res.status(404).json({ success: false, message: 'Booking not found' });
+    const booking = rows[0];
+    if (booking.status === 'rejected') {
+      return res.json({ success: true, message: 'Booking already rejected' });
+    }
+    if (booking.status === 'approved') {
+      return res.status(400).json({ success: false, message: 'Approved bookings must be cancelled instead' });
+    }
+    await pool.query(
+      'UPDATE resource_bookings SET status = ?, approved_by = ?, updated_at = NOW() WHERE id = ?',
+      ['rejected', req.session.userId, bookingId]
+    );
+    await pool.query(
+      'INSERT INTO notifications (user_id, title, message, type, ref_type, ref_id) VALUES (?, ?, ?, ?, ?, ?)',
+      [booking.user_id, 'Resource Booking Rejected', `Your booking for "${booking.resource_name}" was rejected.`, 'booking_rejected', 'booking', bookingId]
+    );
+    res.json({ success: true, message: 'Booking rejected' });
+  } catch (e) {
+    console.error('Error rejecting resource booking:', e);
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });
@@ -2460,11 +2574,24 @@ app.get('/api/admin/events', requireAdmin, async (req, res) => {
 app.put('/api/admin/events/:id/approve', requireAdmin, async (req, res) => {
   const eventId = parseInt(req.params.id, 10);
   try {
-    const [event] = await pool.query('SELECT title, created_by FROM events WHERE id = ?', [eventId]);
+    const [event] = await pool.query('SELECT title, created_by, status FROM events WHERE id = ?', [eventId]);
     if (!event.length) return res.status(404).json({ success: false, message: 'Event not found' });
+    if (event[0].status === 'published') {
+      return res.json({ success: true, message: 'Event already approved' });
+    }
     await pool.query('UPDATE events SET status = ? WHERE id = ?', ['published', eventId]);
-    await pool.query('INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)', 
-      [event[0].created_by, 'Event Approved', `Your event "${event[0].title}" has been approved and published.`, 'event_approval']);
+    const [existing] = await pool.query(
+      `SELECT id FROM notifications 
+       WHERE user_id = ? AND type = 'event_approval' AND ref_type = 'event' AND ref_id = ? 
+       LIMIT 1`,
+      [event[0].created_by, eventId]
+    );
+    if (!existing.length) {
+      await pool.query(
+        'INSERT INTO notifications (user_id, title, message, type, ref_type, ref_id) VALUES (?, ?, ?, ?, ?, ?)', 
+        [event[0].created_by, 'Event Approved', `Your event "${event[0].title}" has been approved and published.`, 'event_approval', 'event', eventId]
+      );
+    }
     await logAdminAction(req.session.userId, req.session.email, 'approve_event', 'event', eventId, 
       { event_title: event[0].title }, getClientIp(req));
     res.json({ success: true, message: 'Event approved' });
@@ -2478,11 +2605,24 @@ app.put('/api/admin/events/:id/reject', requireAdmin, async (req, res) => {
   const eventId = parseInt(req.params.id, 10);
   const { reason } = req.body;
   try {
-    const [event] = await pool.query('SELECT title, created_by FROM events WHERE id = ?', [eventId]);
+    const [event] = await pool.query('SELECT title, created_by, status FROM events WHERE id = ?', [eventId]);
     if (!event.length) return res.status(404).json({ success: false, message: 'Event not found' });
+    if (event[0].status === 'rejected') {
+      return res.json({ success: true, message: 'Event already rejected' });
+    }
     await pool.query('UPDATE events SET status = ?, rejection_reason = ? WHERE id = ?', ['rejected', reason || null, eventId]);
-    await pool.query('INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)', 
-      [event[0].created_by, 'Event Rejected', `Your event "${event[0].title}" was rejected. ${reason ? 'Reason: ' + reason : ''}`, 'event_rejection']);
+    const [existing] = await pool.query(
+      `SELECT id FROM notifications 
+       WHERE user_id = ? AND type = 'event_rejection' AND ref_type = 'event' AND ref_id = ? 
+       LIMIT 1`,
+      [event[0].created_by, eventId]
+    );
+    if (!existing.length) {
+      await pool.query(
+        'INSERT INTO notifications (user_id, title, message, type, ref_type, ref_id) VALUES (?, ?, ?, ?, ?, ?)', 
+        [event[0].created_by, 'Event Rejected', `Your event "${event[0].title}" was rejected. ${reason ? 'Reason: ' + reason : ''}`, 'event_rejection', 'event', eventId]
+      );
+    }
     await logAdminAction(req.session.userId, req.session.email, 'reject_event', 'event', eventId, 
       { event_title: event[0].title, reason }, getClientIp(req));
     res.json({ success: true, message: 'Event rejected' });
