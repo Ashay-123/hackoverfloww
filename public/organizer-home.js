@@ -322,7 +322,6 @@
       if (status === 'pending_approval' || status === 'published' || status === 'closed') {
         addAction('registrations', `<button type="button" class="btn btn-sm btn-ghost" data-registrations="${e.id}">View Registrations</button>`);
       }
-      addAction('duplicate', `<button type="button" class="btn btn-sm btn-ghost" data-duplicate="${e.id}">Duplicate</button>`);
       
       return `<div class="event-card">
         <div class="event-header">
@@ -356,9 +355,6 @@
     });
     el.querySelectorAll('[data-close]').forEach(btn => {
       btn.addEventListener('click', () => closeEvent(parseInt(btn.dataset.close, 10)));
-    });
-    el.querySelectorAll('[data-duplicate]').forEach(btn => {
-      btn.addEventListener('click', () => duplicateEvent(parseInt(btn.dataset.duplicate, 10)));
     });
     el.querySelectorAll('[data-notify]').forEach(btn => {
       btn.addEventListener('click', () => showNotifyModal(parseInt(btn.dataset.notify, 10)));
@@ -708,40 +704,6 @@
       console.error('Error closing event:', err);
       showMessage('Failed to close event', 'error');
     });
-  }
-
-  function duplicateEvent(id) {
-    const event = allEvents.find(e => e.id === id);
-    if (!event) {
-      showMessage('Event not found', 'error');
-      return;
-    }
-    
-    resetEventForm();
-    $('eTitle').value = event.title + ' (Copy)';
-    $('eDescription').value = event.description || '';
-    $('eDate').value = event.event_date || '';
-    $('eStartTime').value = event.start_time || '';
-    $('eEndTime').value = event.end_time || '';
-    $('eMaxParticipants').value = event.max_participants || 0;
-    
-    if (event.location) {
-      currentMode = 'inperson';
-      $('eLocation').value = event.location;
-      qsa('.mode-btn').forEach(b => {
-        b.classList.toggle('active', b.dataset.mode === 'inperson');
-      });
-    } else if (event.online_link) {
-      currentMode = 'online';
-      $('eOnlineLink').value = event.online_link;
-      qsa('.mode-btn').forEach(b => {
-        b.classList.toggle('active', b.dataset.mode === 'online');
-      });
-    }
-    updateModeFields();
-    
-    const createTab = document.querySelector('.tab[data-tab="create"]');
-    if (createTab) createTab.click();
   }
 
   // ---------- Events: Registrations (modal) ----------
