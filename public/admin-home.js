@@ -670,7 +670,9 @@
     filter: 'all',
     search: '',
     ban: null,
-    searchMode: false
+    searchMode: false,
+    threadMeta: null,
+    selectedMessage: null
   };
 
   function roleLabel(role) {
@@ -681,6 +683,73 @@
 
   function formatMessageBody(text) {
     return escapeHtml(text || '').replace(/\n/g, '<br>');
+  }
+
+  function showChatComposer(show) {
+    const form = $('chatForm');
+    if (form) form.style.display = show ? 'flex' : 'none';
+  }
+
+  function setChatEmptyState(message, metaText) {
+    const title = $('chatTitle');
+    const meta = $('chatMeta');
+    const list = $('chatMessages');
+    if (title) title.textContent = 'Messages';
+    if (meta) meta.textContent = metaText || '';
+    if (list) list.innerHTML = `<p class="muted">${message}</p>`;
+    const pins = $('chatPins');
+    if (pins) pins.innerHTML = '';
+    const notice = $('chatBanNotice');
+    if (notice) notice.style.display = 'none';
+    const details = $('chatThreadDetails');
+    if (details) details.textContent = 'Select a chat to view details.';
+    const actions = $('chatPanelActions');
+    if (actions) actions.innerHTML = '';
+    const searchRow = document.querySelector('.chat-search-row');
+    if (searchRow) searchRow.style.display = 'none';
+    setSelectedMessage(null);
+    showChatComposer(false);
+  }
+
+  function renderThreadDetails() {
+    const details = $('chatThreadDetails');
+    if (!details) return;
+    if (!chatState.threadMeta) {
+      details.textContent = 'Select a chat to view details.';
+      return;
+    }
+    const meta = chatState.threadMeta;
+    const status = meta.is_archived ? 'Archived' : meta.is_closed ? 'Closed' : 'Active';
+    details.innerHTML = `
+      <div><strong>${escapeHtml(meta.title || 'Chat')}</strong></div>
+      <div class="chat-selected-meta">Type: ${escapeHtml(meta.type || 'chat')}</div>
+      <div class="chat-selected-meta">Status: ${status}</div>
+      <div class="chat-selected-meta">Ref ID: ${meta.ref_id || '—'}</div>
+    `;
+  }
+
+  function setSelectedMessage(msg) {
+    chatState.selectedMessage = msg;
+    const box = $('chatSelectedMessage');
+    const delBtn = $('chatDeleteMessage');
+    const banBtn = $('chatBanUser');
+    const unbanBtn = $('chatUnbanUser');
+    if (!box) return;
+    if (!msg) {
+      box.textContent = 'Select a message to moderate.';
+      if (delBtn) delBtn.disabled = true;
+      if (banBtn) banBtn.disabled = true;
+      if (unbanBtn) unbanBtn.disabled = true;
+      return;
+    }
+    box.innerHTML = `
+      <div><strong>${escapeHtml(msg.sender_name || 'User')}</strong> <span class="role-badge ${msg.sender_role}">${roleLabel(msg.sender_role)}</span></div>
+      <div class="chat-selected-meta">${formatDateTime(msg.created_at)}</div>
+      <div class="chat-selected-meta">${escapeHtml(msg.display_body || '')}</div>
+    `;
+    if (delBtn) delBtn.disabled = !msg.can_delete;
+    if (banBtn) banBtn.disabled = !msg.sender_id;
+    if (unbanBtn) unbanBtn.disabled = !msg.sender_id;
   }
 
   function buildMessageTree(messages) {
@@ -763,11 +832,16 @@
     if (!el) return;
     if (!messages.length) {
       el.innerHTML = '<p class="muted">No messages yet.</p>';
+      setSelectedMessage(null);
       return;
     }
     const tree = buildMessageTree(messages);
     el.innerHTML = tree.map(renderMessageNode).join('');
     wireChatMessageActions();
+    if (chatState.selectedMessage) {
+      const refreshed = messages.find(m => m.id === chatState.selectedMessage.id);
+      setSelectedMessage(refreshed || null);
+    }
   }
 
   function renderPinnedMessages(pinned) {
@@ -801,17 +875,23 @@
       const term = chatState.search.toLowerCase();
       threads = threads.filter(t => (t.title || '').toLowerCase().includes(term));
     }
+    if (chatState.activeThreadId && !threads.some(t => t.id === chatState.activeThreadId)) {
+      chatState.activeThreadId = null;
+    }
     if (!threads.length) {
-      el.innerHTML = '<p class="muted">No chats available.</p>';
+      const emptyMsg = chatState.search ? 'No chats match your search.' : 'No chats yet — join an event or club to start chatting.';
+      el.innerHTML = `<p class="muted">${emptyMsg}</p>`;
+      setChatEmptyState(emptyMsg);
       return;
     }
     el.innerHTML = threads.map(t => {
       const active = t.id === chatState.activeThreadId ? 'active' : '';
       const label = t.type === 'club' ? 'Club' : 'Event';
+      const status = t.is_archived ? 'Archived' : t.is_closed ? 'Closed' : 'Active';
       const meta = t.last_message_at ? formatDateTime(t.last_message_at) : 'No messages yet';
       return `<div class="chat-thread-item ${active}" data-thread-id="${t.id}">
         <div class="chat-thread-title">${escapeHtml(t.title || `${label} chat`)}</div>
-        <div class="chat-thread-meta">${label} • ${escapeHtml(meta)}</div>
+        <div class="chat-thread-meta">${label} • ${escapeHtml(meta)} • ${status}</div>
       </div>`;
     }).join('');
     el.querySelectorAll('[data-thread-id]').forEach(item => {
@@ -821,11 +901,16 @@
         setActiveThread(id);
       });
     });
+    if (!chatState.activeThreadId) {
+      setChatEmptyState('Select a chat to view messages.');
+    }
   }
 
   function setActiveThread(threadId) {
     chatState.activeThreadId = threadId;
     chatState.searchMode = false;
+    clearReply();
+    setSelectedMessage(null);
     renderChatThreads();
     loadChatThread(threadId);
   }
@@ -835,9 +920,10 @@
     if (!el) return;
     if (!chatState.threads.length) el.innerHTML = '<p class="muted">Loading…</p>';
     try {
-      const r = await get('/api/chat/threads');
+      const query = chatState.search ? `?q=${encodeURIComponent(chatState.search)}` : '';
+      const r = await get('/api/chats' + query);
       if (r.success) {
-        chatState.threads = r.threads || [];
+        chatState.threads = r.chats || [];
         renderChatThreads();
       }
     } catch (e) {
@@ -850,32 +936,54 @@
     const el = $('chatMessages');
     if (el) el.innerHTML = '<p class="muted">Loading messages…</p>';
     try {
-      const r = await get('/api/chat/threads/' + threadId);
+      const r = await get('/api/chats/' + threadId + '/messages');
       if (!r.success) {
-        if (el) el.innerHTML = '<p class="muted">Could not load messages.</p>';
+        if (el) el.innerHTML = `<p class="muted">${escapeHtml(r.message || 'Could not load messages.')}</p>`;
+        showChatComposer(false);
         return;
       }
       chatState.permissions = r.permissions || {};
       chatState.messages = r.messages || [];
       chatState.pinned = r.pinned || [];
       chatState.ban = r.ban || null;
+      chatState.threadMeta = r.thread || null;
+      chatState.searchMode = false;
 
       const title = r.thread?.title || 'Chat';
       $('chatTitle').textContent = title;
-      $('chatMeta').textContent = r.thread?.type === 'club' ? 'Club chat' : 'Event chat';
+      const metaParts = [];
+      if (r.thread?.type === 'club') metaParts.push('Club chat');
+      if (r.thread?.type === 'event') metaParts.push('Event chat');
+      if (r.thread?.is_archived) metaParts.push('Archived');
+      if (r.thread?.is_closed) metaParts.push('Closed');
+      $('chatMeta').textContent = metaParts.join(' • ') || 'Chat';
+      renderThreadDetails();
+      const searchRow = document.querySelector('.chat-search-row');
+      if (searchRow) searchRow.style.display = 'flex';
 
       const banNotice = $('chatBanNotice');
-      if (chatState.ban && banNotice) {
-        const until = chatState.ban.end_at ? `until ${formatDateTime(chatState.ban.end_at)}` : 'until an admin unbans you';
-        banNotice.textContent = `Chat disabled ${until}.`;
-        banNotice.style.display = 'block';
-      } else if (banNotice) {
-        banNotice.style.display = 'none';
+      if (banNotice) {
+        let noticeText = '';
+        if (r.thread?.is_archived) {
+          noticeText = 'This chat has been archived.';
+        } else if (r.thread?.is_closed) {
+          noticeText = 'This chat is closed. You can read messages but cannot post.';
+        } else if (chatState.ban) {
+          const until = chatState.ban.end_at ? `until ${formatDateTime(chatState.ban.end_at)}` : 'until an admin unbans you';
+          noticeText = `Chat disabled ${until}.`;
+        }
+        if (noticeText) {
+          banNotice.textContent = noticeText;
+          banNotice.style.display = 'block';
+        } else {
+          banNotice.style.display = 'none';
+        }
       }
 
-      const canPost = chatState.permissions.canPost && !chatState.ban;
+      const canPost = chatState.permissions.canPost && !chatState.ban && !r.thread?.is_archived;
       $('chatInput').disabled = !canPost;
       $('chatSendBtn').disabled = !canPost;
+      showChatComposer(true);
 
       const announceWrap = $('chatAnnouncementWrap');
       if (announceWrap) {
@@ -890,7 +998,7 @@
         panelActions.innerHTML = `<button type="button" class="btn btn-danger btn-sm" id="chatDeleteThread">Delete Thread</button>`;
         panelActions.querySelector('#chatDeleteThread')?.addEventListener('click', async () => {
           if (!confirm('Delete this entire thread?')) return;
-          const res = await del(`/api/chat/threads/${threadId}`);
+          const res = await del(`/api/chats/${threadId}`);
           if (!res.success) {
             alert(res.message || 'Could not delete thread.');
             return;
@@ -898,6 +1006,11 @@
           chatState.activeThreadId = null;
           $('chatTitle').textContent = 'Select a chat';
           $('chatMessages').innerHTML = '<p class="muted">No chat selected.</p>';
+          renderThreadDetails();
+          setSelectedMessage(null);
+          showChatComposer(false);
+          const searchRow = document.querySelector('.chat-search-row');
+          if (searchRow) searchRow.style.display = 'none';
           loadChatThreads();
         });
       }
@@ -938,7 +1051,7 @@
     const body = input.value.trim();
     if (!body) return;
     try {
-      const res = await post(`/api/chat/threads/${chatState.activeThreadId}/messages`, {
+      const res = await post(`/api/chats/${chatState.activeThreadId}/messages`, {
         body,
         parentId: chatState.replyTo?.id || null,
         is_announcement: $('chatAnnouncement')?.checked || false
@@ -1076,13 +1189,22 @@
         btn.textContent = isHidden ? btn.textContent.replace('Expand', 'Collapse') : btn.textContent.replace('Collapse', 'Expand');
       });
     });
+
+    container.querySelectorAll('.chat-message').forEach(msgEl => {
+      msgEl.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        const id = parseInt(msgEl.dataset.message, 10);
+        const msg = chatState.messages.find(m => m.id === id);
+        if (msg) setSelectedMessage(msg);
+      });
+    });
   }
 
   async function runChatSearch() {
     if (!chatState.activeThreadId) return;
     const query = $('chatMessageSearch').value.trim();
     if (!query) return;
-    const res = await get(`/api/chat/threads/${chatState.activeThreadId}/search?q=${encodeURIComponent(query)}`);
+    const res = await get(`/api/chats/${chatState.activeThreadId}/search?q=${encodeURIComponent(query)}`);
     if (!res.success) {
       alert(res.message || 'Search failed.');
       return;
@@ -1119,6 +1241,8 @@
     $('chatMessageSearch').value = '';
     if (chatState.activeThreadId) {
       loadChatThread(chatState.activeThreadId);
+    } else {
+      setChatEmptyState('Select a chat to view messages.');
     }
   }
 
@@ -1163,13 +1287,49 @@
     }
   }
 
+  async function loadBannedWords() {
+    const el = $('chatBannedWordsList');
+    if (!el) return;
+    try {
+      const res = await get('/api/admin/chat/banned-words');
+      if (!res.success) {
+        el.innerHTML = '<p class="muted">Could not load banned words.</p>';
+        return;
+      }
+      const words = res.words || [];
+      if (!words.length) {
+        el.innerHTML = '<p class="muted">No banned words.</p>';
+        return;
+      }
+      el.innerHTML = words.map(w => `
+        <div class="item-row">
+          <div><h4>${escapeHtml(w.word)}</h4></div>
+          <button type="button" class="btn btn-ghost btn-sm" data-remove-word="${w.id}">Remove</button>
+        </div>
+      `).join('');
+      el.querySelectorAll('[data-remove-word]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = parseInt(btn.dataset.removeWord, 10);
+          const res = await del(`/api/admin/chat/banned-words/${id}`);
+          if (!res.success) {
+            alert(res.message || 'Could not remove word.');
+            return;
+          }
+          loadBannedWords();
+        });
+      });
+    } catch (e) {
+      el.innerHTML = '<p class="muted">Could not load banned words.</p>';
+    }
+  }
+
   function initChatUi() {
     const searchInput = $('chatThreadSearch');
     if (searchInput) {
-      searchInput.addEventListener('input', () => {
+      searchInput.addEventListener('input', debounce(() => {
         chatState.search = searchInput.value.trim();
-        renderChatThreads();
-      });
+        loadChatThreads();
+      }, 300));
     }
     document.querySelectorAll('[data-chat-filter]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1183,6 +1343,51 @@
     $('chatForm')?.addEventListener('submit', submitChatMessage);
     $('chatSearchBtn')?.addEventListener('click', runChatSearch);
     $('chatClearSearchBtn')?.addEventListener('click', clearChatSearch);
+
+    $('chatBannedWordForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const input = $('chatBannedWordInput');
+      if (!input) return;
+      const word = input.value.trim();
+      if (!word) return;
+      const res = await post('/api/admin/chat/banned-words', { word });
+      if (!res.success) {
+        alert(res.message || 'Could not add word.');
+        return;
+      }
+      input.value = '';
+      loadBannedWords();
+    });
+
+    $('chatDeleteMessage')?.addEventListener('click', async () => {
+      const msg = chatState.selectedMessage;
+      if (!msg) return;
+      if (!confirm('Delete this message?')) return;
+      const res = await del(`/api/chat/messages/${msg.id}`);
+      if (!res.success) {
+        alert(res.message || 'Could not delete message.');
+        return;
+      }
+      setSelectedMessage(null);
+      loadChatThread(chatState.activeThreadId);
+    });
+
+    $('chatBanUser')?.addEventListener('click', async () => {
+      const msg = chatState.selectedMessage;
+      if (!msg) return;
+      await banUser(msg.sender_id);
+    });
+
+    $('chatUnbanUser')?.addEventListener('click', async () => {
+      const msg = chatState.selectedMessage;
+      if (!msg) return;
+      const res = await post('/api/admin/chat/unban', { userId: msg.sender_id });
+      if (!res.success) {
+        alert(res.message || 'Unban failed.');
+        return;
+      }
+      loadChatBans();
+    });
   }
 
   // ===== Modals =====
@@ -1236,6 +1441,7 @@
     initChatUi();
     loadChatThreads();
     loadChatBans();
+    loadBannedWords();
     setInterval(() => {
       if (chatState.activeThreadId && !chatState.searchMode) {
         loadChatThread(chatState.activeThreadId);
@@ -1244,6 +1450,7 @@
     setInterval(() => {
       loadChatThreads();
       loadChatBans();
+      loadBannedWords();
     }, 30000);
   }
 

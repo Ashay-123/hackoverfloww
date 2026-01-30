@@ -592,13 +592,37 @@
     filter: 'all',
     search: '',
     ban: null,
-    searchMode: false
+    searchMode: false,
+    threadMeta: null
   };
 
   function roleLabel(role) {
     if (role === 'admin') return 'Admin';
     if (role === 'organizer') return 'Organizer';
     return 'Student';
+  }
+
+  function showChatComposer(show) {
+    const form = $('chatForm');
+    if (form) form.style.display = show ? 'flex' : 'none';
+  }
+
+  function setChatEmptyState(message, metaText) {
+    const title = $('chatTitle');
+    const meta = $('chatMeta');
+    const list = $('chatMessages');
+    if (title) title.textContent = 'Messages';
+    if (meta) meta.textContent = metaText || '';
+    if (list) list.innerHTML = `<p class="muted">${message}</p>`;
+    const pins = $('chatPins');
+    if (pins) pins.innerHTML = '';
+    const notice = $('chatBanNotice');
+    if (notice) notice.style.display = 'none';
+    const actions = $('chatPanelActions');
+    if (actions) actions.innerHTML = '';
+    const searchRow = document.querySelector('.chat-search-row');
+    if (searchRow) searchRow.style.display = 'none';
+    showChatComposer(false);
   }
 
   function formatMessageBody(text) {
@@ -720,17 +744,23 @@
       const term = chatState.search.toLowerCase();
       threads = threads.filter(t => (t.title || '').toLowerCase().includes(term));
     }
+    if (chatState.activeThreadId && !threads.some(t => t.id === chatState.activeThreadId)) {
+      chatState.activeThreadId = null;
+    }
     if (!threads.length) {
-      el.innerHTML = '<p class="muted">No chats available.</p>';
+      const emptyMsg = chatState.search ? 'No chats match your search.' : 'No chats yet — join an event or club to start chatting.';
+      el.innerHTML = `<p class="muted">${emptyMsg}</p>`;
+      setChatEmptyState(emptyMsg);
       return;
     }
     el.innerHTML = threads.map(t => {
       const active = t.id === chatState.activeThreadId ? 'active' : '';
       const label = t.type === 'club' ? 'Club' : 'Event';
+      const status = t.is_archived ? 'Archived' : t.is_closed ? 'Closed' : 'Active';
       const meta = t.last_message_at ? formatDateTime(t.last_message_at) : 'No messages yet';
       return `<div class="chat-thread-item ${active}" data-thread-id="${t.id}">
         <div class="chat-thread-title">${escapeHtml(t.title || `${label} chat`)}</div>
-        <div class="chat-thread-meta">${label} • ${escapeHtml(meta)}</div>
+        <div class="chat-thread-meta">${label} • ${escapeHtml(meta)} • ${status}</div>
       </div>`;
     }).join('');
     el.querySelectorAll('[data-thread-id]').forEach(item => {
@@ -740,11 +770,15 @@
         setActiveThread(id);
       });
     });
+    if (!chatState.activeThreadId) {
+      setChatEmptyState('Select a chat to view messages.');
+    }
   }
 
   function setActiveThread(threadId) {
     chatState.activeThreadId = threadId;
     chatState.searchMode = false;
+    clearReply();
     renderChatThreads();
     loadChatThread(threadId);
   }
@@ -754,9 +788,9 @@
     if (!el) return;
     if (!chatState.threads.length) el.innerHTML = '<p class="muted">Loading…</p>';
     try {
-      const r = await get('/api/chat/threads');
+      const r = await get('/api/chats');
       if (r.success) {
-        chatState.threads = r.threads || [];
+        chatState.threads = r.chats || [];
         renderChatThreads();
       }
     } catch (e) {
@@ -769,32 +803,55 @@
     const el = $('chatMessages');
     if (el) el.innerHTML = '<p class="muted">Loading messages…</p>';
     try {
-      const r = await get('/api/chat/threads/' + threadId);
+      const r = await get('/api/chats/' + threadId + '/messages');
       if (!r.success) {
-        if (el) el.innerHTML = '<p class="muted">Could not load messages.</p>';
+        if (el) el.innerHTML = `<p class="muted">${escapeHtml(r.message || 'Could not load messages.')}</p>`;
+        showChatComposer(false);
         return;
       }
       chatState.permissions = r.permissions || {};
       chatState.messages = r.messages || [];
       chatState.pinned = r.pinned || [];
       chatState.ban = r.ban || null;
+      chatState.threadMeta = r.thread || null;
+      chatState.searchMode = false;
 
       const title = r.thread?.title || 'Chat';
       $('chatTitle').textContent = title;
-      $('chatMeta').textContent = r.thread?.type === 'club' ? 'Club chat' : 'Event chat';
+      const metaParts = [];
+      if (r.thread?.type === 'club') metaParts.push('Club chat');
+      if (r.thread?.type === 'event') metaParts.push('Event chat');
+      if (r.thread?.is_archived) metaParts.push('Archived');
+      if (r.thread?.is_closed) metaParts.push('Closed');
+      $('chatMeta').textContent = metaParts.join(' • ') || 'Chat';
+      const actions = $('chatPanelActions');
+      if (actions) actions.innerHTML = '';
+      const searchRow = document.querySelector('.chat-search-row');
+      if (searchRow) searchRow.style.display = 'flex';
 
       const banNotice = $('chatBanNotice');
-      if (chatState.ban && banNotice) {
-        const until = chatState.ban.end_at ? `until ${formatDateTime(chatState.ban.end_at)}` : 'until an admin unbans you';
-        banNotice.textContent = `Chat disabled ${until}.`;
-        banNotice.style.display = 'block';
-      } else if (banNotice) {
-        banNotice.style.display = 'none';
+      if (banNotice) {
+        let noticeText = '';
+        if (r.thread?.is_archived) {
+          noticeText = 'This chat has been archived.';
+        } else if (r.thread?.is_closed) {
+          noticeText = 'This chat is closed. You can read messages but cannot post.';
+        } else if (chatState.ban) {
+          const until = chatState.ban.end_at ? `until ${formatDateTime(chatState.ban.end_at)}` : 'until an admin unbans you';
+          noticeText = `Chat disabled ${until}.`;
+        }
+        if (noticeText) {
+          banNotice.textContent = noticeText;
+          banNotice.style.display = 'block';
+        } else {
+          banNotice.style.display = 'none';
+        }
       }
 
-      const canPost = chatState.permissions.canPost && !chatState.ban;
+      const canPost = chatState.permissions.canPost && !chatState.ban && !r.thread?.is_archived;
       $('chatInput').disabled = !canPost;
       $('chatSendBtn').disabled = !canPost;
+      showChatComposer(true);
 
       const announceWrap = $('chatAnnouncementWrap');
       if (announceWrap) {
@@ -841,7 +898,7 @@
     const body = input.value.trim();
     if (!body) return;
     try {
-      const res = await post(`/api/chat/threads/${chatState.activeThreadId}/messages`, {
+      const res = await post(`/api/chats/${chatState.activeThreadId}/messages`, {
         body,
         parentId: chatState.replyTo?.id || null,
         is_announcement: $('chatAnnouncement')?.checked || false
@@ -953,7 +1010,7 @@
     if (!chatState.activeThreadId) return;
     const query = $('chatMessageSearch').value.trim();
     if (!query) return;
-    const res = await get(`/api/chat/threads/${chatState.activeThreadId}/search?q=${encodeURIComponent(query)}`);
+    const res = await get(`/api/chats/${chatState.activeThreadId}/search?q=${encodeURIComponent(query)}`);
     if (!res.success) {
       alert(res.message || 'Search failed.');
       return;
@@ -990,6 +1047,8 @@
     $('chatMessageSearch').value = '';
     if (chatState.activeThreadId) {
       loadChatThread(chatState.activeThreadId);
+    } else {
+      setChatEmptyState('Select a chat to view messages.');
     }
   }
 

@@ -89,6 +89,7 @@ async function initDb() {
     await pool.query('SELECT 1');
     console.log('Connected to MySQL database');
     await seedIfEmpty();
+    await backfillChatThreads();
   } catch (err) {
     console.error('MySQL connection failed. Check that MySQL is running, credentials are correct, and the schema is loaded (database.sql).');
     console.error(`Tried config -> host:${dbConfig.host} user:${dbConfig.user} db:${dbConfig.database}`);
@@ -335,25 +336,45 @@ async function ensureChatThreads(type, ids) {
   await pool.query(`INSERT IGNORE INTO chat_threads (type, ref_id) VALUES ${values}`, params);
 }
 
+async function backfillChatThreads() {
+  try {
+    const [clubRows] = await pool.query('SELECT id FROM clubs');
+    const clubIds = clubRows.map(r => r.id);
+    await ensureChatThreads('club', clubIds);
+
+    const [eventRows] = await pool.query('SELECT id FROM events');
+    const eventIds = eventRows.map(r => r.id);
+    await ensureChatThreads('event', eventIds);
+  } catch (e) {
+    console.error('Failed to backfill chat threads:', e.message);
+  }
+}
+
 async function getChatThreadAccess(threadId, userId, role) {
   const [rows] = await pool.query('SELECT * FROM chat_threads WHERE id = ?', [threadId]);
   if (!rows.length) return { ok: false, error: 'Thread not found' };
   const thread = rows[0];
+  const isArchived = !!thread.deleted_at;
 
-  if (thread.deleted_at && role !== 'admin') {
-    return { ok: false, error: 'Thread has been deleted' };
+  if (isArchived && role !== 'admin') {
+    return { ok: false, error: 'Chat has been archived' };
   }
 
   if (role === 'admin') {
     let title = '';
+    let isClosed = false;
     if (thread.type === 'club') {
       const [club] = await pool.query('SELECT name FROM clubs WHERE id = ?', [thread.ref_id]);
-      title = club[0]?.name || 'Club';
+      title = club[0]?.name || 'Archived club chat';
     } else {
-      const [event] = await pool.query('SELECT title FROM events WHERE id = ?', [thread.ref_id]);
-      title = event[0]?.title || 'Event';
+      const [event] = await pool.query('SELECT title, status FROM events WHERE id = ?', [thread.ref_id]);
+      title = event[0]?.title || 'Archived event chat';
+      if (event[0]?.status && ['closed', 'rejected'].includes(event[0].status)) {
+        isClosed = true;
+      }
     }
-    return { ok: true, thread, title, canRead: true, canPost: true, canPin: true, canAnnounce: true, canModerate: true };
+    const canPost = !isClosed && !isArchived;
+    return { ok: true, thread, title, canRead: true, canPost, canPin: canPost, canAnnounce: canPost, canModerate: true, isClosed, isArchived };
   }
 
   if (thread.type === 'club') {
@@ -366,6 +387,9 @@ async function getChatThreadAccess(threadId, userId, role) {
     if (!membership.length) return { ok: false, error: 'Club membership required' };
     const memberRole = membership[0].role;
     const isLeader = memberRole === 'head' || memberRole === 'coordinator';
+    if (role === 'organizer' && !isLeader) {
+      return { ok: false, error: 'Organizer access is limited to clubs you manage' };
+    }
     return { 
       ok: true, 
       thread, 
@@ -374,14 +398,17 @@ async function getChatThreadAccess(threadId, userId, role) {
       canPost: true, 
       canPin: isLeader, 
       canAnnounce: isLeader, 
-      canModerate: isLeader 
+      canModerate: isLeader,
+      isClosed: false,
+      isArchived: false
     };
   }
 
   if (thread.type === 'event') {
-    const [events] = await pool.query('SELECT id, title, created_by FROM events WHERE id = ?', [thread.ref_id]);
+    const [events] = await pool.query('SELECT id, title, created_by, status FROM events WHERE id = ?', [thread.ref_id]);
     if (!events.length) return { ok: false, error: 'Event not found' };
     const event = events[0];
+    const isClosed = ['closed', 'rejected'].includes(event.status);
     const isOrganizer = event.created_by === userId;
     if (isOrganizer) {
       return { 
@@ -389,10 +416,12 @@ async function getChatThreadAccess(threadId, userId, role) {
         thread, 
         title: event.title, 
         canRead: true, 
-        canPost: true, 
-        canPin: true, 
-        canAnnounce: true, 
-        canModerate: true 
+        canPost: !isClosed, 
+        canPin: !isClosed, 
+        canAnnounce: !isClosed, 
+        canModerate: true,
+        isClosed,
+        isArchived: false
       };
     }
     const [reg] = await pool.query(
@@ -400,16 +429,21 @@ async function getChatThreadAccess(threadId, userId, role) {
        WHERE event_id = ? AND user_id = ? AND status <> 'cancelled'`,
       [event.id, userId]
     );
+    if (role === 'organizer' && !isOrganizer) {
+      return { ok: false, error: 'Organizer access is limited to events you manage' };
+    }
     if (!reg.length) return { ok: false, error: 'Event registration required' };
     return { 
       ok: true, 
       thread, 
       title: event.title, 
       canRead: true, 
-      canPost: true, 
+      canPost: !isClosed, 
       canPin: false, 
       canAnnounce: false, 
-      canModerate: false 
+      canModerate: false,
+      isClosed,
+      isArchived: false
     };
   }
 
@@ -978,6 +1012,7 @@ app.post('/api/events', requireOrganizer, async (req, res) => {
       [title, description, event_date, start_time, end_time, location || null, online_link || null, 
        maxParts, formattedDeadline, req.session.userId, initialStatus]
     );
+    await ensureChatThreads('event', [r.insertId]);
     let message = 'Event created successfully';
     if (initialStatus === 'pending_approval') message = 'Event created and submitted for approval';
     if (initialStatus === 'draft') message = 'Event saved as draft';
@@ -1117,6 +1152,7 @@ app.delete('/api/events/:id', requireOrganizer, async (req, res) => {
     }
     
     // Delete draft or closed events
+    await pool.query('UPDATE chat_threads SET deleted_at = NOW() WHERE type = ? AND ref_id = ?', ['event', eventId]);
     await pool.query('DELETE FROM events WHERE id = ?', [eventId]);
     res.json({ message: 'Event deleted successfully' });
   } catch (e) {
@@ -1474,171 +1510,241 @@ app.get('/api/messages/threads', requireAuth, async (req, res) => {
 
 // ==================== CHAT (Event/Club threads) ====================
 
-app.get('/api/chat/threads', requireAuth, async (req, res) => {
-  const userId = getUserId(req);
-  const role = req.session.role;
-  const limit = Math.min(parseInt(req.query.limit || '200', 10), 500);
-  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
-  try {
-    let clubs = [];
-    let events = [];
+async function listChatsForUser(userId, role, search) {
+  if (role === 'admin') {
+    const [clubIdsRows] = await pool.query('SELECT id FROM clubs');
+    const [eventIdsRows] = await pool.query('SELECT id FROM events');
+    await ensureChatThreads('club', clubIdsRows.map(r => r.id));
+    await ensureChatThreads('event', eventIdsRows.map(r => r.id));
 
-    if (role === 'admin') {
-      const [clubRows] = await pool.query('SELECT id, name FROM clubs ORDER BY name');
-      clubs = clubRows;
-      const [eventRows] = await pool.query('SELECT id, title FROM events ORDER BY created_at DESC LIMIT ?', [limit]);
-      events = eventRows;
-    } else {
-      const [clubRows] = await pool.query(
-        `SELECT c.id, c.name, cm.role as membership_role 
-         FROM club_members cm 
-         JOIN clubs c ON c.id = cm.club_id 
-         WHERE cm.user_id = ?`,
-        [userId]
-      );
-      clubs = clubRows;
-      const [eventRows] = await pool.query(
-        `SELECT e.id, e.title, e.created_by
-         FROM events e
-         LEFT JOIN event_registrations er ON er.event_id = e.id AND er.user_id = ?
-         WHERE e.created_by = ? OR (er.user_id IS NOT NULL AND er.status <> 'cancelled')
-         ORDER BY e.event_date DESC, e.start_time DESC`,
-        [userId, userId]
-      );
-      events = eventRows;
-    }
-
-    const clubIds = clubs.map(c => c.id);
-    const eventIds = events.map(e => e.id);
-
-    await ensureChatThreads('club', clubIds);
-    await ensureChatThreads('event', eventIds);
-
-    if (!clubIds.length && !eventIds.length) {
-      return res.json({ success: true, threads: [] });
-    }
-
-    const clauses = [];
     const params = [];
-    if (clubIds.length) {
-      clauses.push(`(ct.type = 'club' AND ct.ref_id IN (${clubIds.map(() => '?').join(',')}))`);
-      params.push(...clubIds);
+    let where = '1=1';
+    if (search) {
+      where += ' AND ((ct.type = \'club\' AND c.name LIKE ?) OR (ct.type = \'event\' AND e.title LIKE ?))';
+      params.push(`%${search}%`, `%${search}%`);
     }
-    if (eventIds.length) {
-      clauses.push(`(ct.type = 'event' AND ct.ref_id IN (${eventIds.map(() => '?').join(',')}))`);
-      params.push(...eventIds);
-    }
-    let where = clauses.join(' OR ');
-    if (role !== 'admin') where = `(${where}) AND ct.deleted_at IS NULL`;
-
-    const [threads] = await pool.query(
-      `SELECT ct.id, ct.type, ct.ref_id, ct.created_at, ct.last_message_at,
-              c.name as club_name, e.title as event_title
+    const [rows] = await pool.query(
+      `SELECT ct.id, ct.type, ct.ref_id, ct.created_at, ct.last_message_at, ct.deleted_at,
+              c.name as club_name,
+              e.title as event_title, e.status as event_status
        FROM chat_threads ct
        LEFT JOIN clubs c ON ct.type = 'club' AND c.id = ct.ref_id
        LEFT JOIN events e ON ct.type = 'event' AND e.id = ct.ref_id
        WHERE ${where}
        ORDER BY COALESCE(ct.last_message_at, ct.created_at) DESC
-       LIMIT ${limit}`,
+       LIMIT 500`,
       params
     );
 
-    const result = threads.map(t => ({
+    return rows.map(t => {
+      const title = t.type === 'club' ? t.club_name : t.event_title;
+      const isArchived = !!t.deleted_at || !title;
+      const isClosed = t.type === 'event' && ['closed', 'rejected'].includes(t.event_status);
+      return {
+        id: t.id,
+        type: t.type,
+        ref_id: t.ref_id,
+        title: title || (t.type === 'club' ? 'Archived club chat' : 'Archived event chat'),
+        last_message_at: t.last_message_at || t.created_at,
+        is_closed: isClosed || isArchived,
+        is_archived: isArchived
+      };
+    });
+  }
+
+  let clubs = [];
+  let events = [];
+  if (role === 'organizer') {
+    const [clubRows] = await pool.query(
+      `SELECT c.id, c.name
+       FROM club_members cm
+       JOIN clubs c ON c.id = cm.club_id
+       WHERE cm.user_id = ? AND cm.role IN ('head', 'coordinator')`,
+      [userId]
+    );
+    clubs = clubRows;
+    const [eventRows] = await pool.query(
+      `SELECT id, title, status
+       FROM events
+       WHERE created_by = ?
+       ORDER BY event_date DESC, start_time DESC`,
+      [userId]
+    );
+    events = eventRows;
+  } else {
+    const [clubRows] = await pool.query(
+      `SELECT c.id, c.name
+       FROM club_members cm
+       JOIN clubs c ON c.id = cm.club_id
+       WHERE cm.user_id = ?`,
+      [userId]
+    );
+    clubs = clubRows;
+    const [eventRows] = await pool.query(
+      `SELECT e.id, e.title, e.status
+       FROM event_registrations er
+       JOIN events e ON e.id = er.event_id
+       WHERE er.user_id = ? AND er.status <> 'cancelled'
+       ORDER BY e.event_date DESC, e.start_time DESC`,
+      [userId]
+    );
+    events = eventRows;
+  }
+
+  const clubIds = clubs.map(c => c.id);
+  const eventIds = events.map(e => e.id);
+
+  await ensureChatThreads('club', clubIds);
+  await ensureChatThreads('event', eventIds);
+
+  if (!clubIds.length && !eventIds.length) return [];
+
+  const clauses = [];
+  const params = [];
+  if (clubIds.length) {
+    clauses.push(`(ct.type = 'club' AND ct.ref_id IN (${clubIds.map(() => '?').join(',')}))`);
+    params.push(...clubIds);
+  }
+  if (eventIds.length) {
+    clauses.push(`(ct.type = 'event' AND ct.ref_id IN (${eventIds.map(() => '?').join(',')}))`);
+    params.push(...eventIds);
+  }
+  const where = `(${clauses.join(' OR ')}) AND ct.deleted_at IS NULL`;
+
+  const [threads] = await pool.query(
+    `SELECT ct.id, ct.type, ct.ref_id, ct.created_at, ct.last_message_at,
+            c.name as club_name,
+            e.title as event_title, e.status as event_status
+     FROM chat_threads ct
+     LEFT JOIN clubs c ON ct.type = 'club' AND c.id = ct.ref_id
+     LEFT JOIN events e ON ct.type = 'event' AND e.id = ct.ref_id
+     WHERE ${where}
+     ORDER BY COALESCE(ct.last_message_at, ct.created_at) DESC`,
+    params
+  );
+
+  let result = threads.map(t => {
+    const title = t.type === 'club' ? t.club_name : t.event_title;
+    const isClosed = t.type === 'event' && ['closed', 'rejected'].includes(t.event_status);
+    return {
       id: t.id,
       type: t.type,
       ref_id: t.ref_id,
-      title: t.type === 'club' ? t.club_name : t.event_title,
-      last_message_at: t.last_message_at || t.created_at
-    }));
+      title: title || '',
+      last_message_at: t.last_message_at || t.created_at,
+      is_closed: isClosed,
+      is_archived: false
+    };
+  });
 
-    res.json({ success: true, threads: result });
-  } catch (e) {
-    console.error('Error loading chat threads:', e);
-    res.status(500).json({ success: false, message: 'Database error' });
+  result = result.filter(r => r.title);
+  if (search) {
+    const term = search.toLowerCase();
+    result = result.filter(r => (r.title || '').toLowerCase().includes(term));
   }
-});
+  return result;
+}
 
-app.get('/api/chat/threads/:threadId', requireAuth, async (req, res) => {
+async function handleListChats(req, res, responseKey) {
   const userId = getUserId(req);
   const role = req.session.role;
-  const threadId = parseInt(req.params.threadId, 10);
+  const search = String(req.query.q || '').trim();
   if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
-  if (!threadId) return res.status(400).json({ success: false, message: 'Invalid thread' });
   try {
-    const access = await getChatThreadAccess(threadId, userId, role);
-    if (!access.ok) return res.status(403).json({ success: false, message: access.error });
+    const chats = await listChatsForUser(userId, role, search);
+    res.json({ success: true, [responseKey]: chats });
+  } catch (e) {
+    console.error('Error loading chats:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+}
 
-    const activeBan = await getActiveChatBan(userId);
-    const [pinRows] = await pool.query('SELECT message_id FROM chat_pins WHERE thread_id = ?', [threadId]);
-    const pinnedIds = pinRows.map(r => r.message_id);
+async function buildChatMessagesPayload(threadId, userId, role) {
+  const access = await getChatThreadAccess(threadId, userId, role);
+  if (!access.ok) {
+    return { ok: false, status: 403, message: access.error };
+  }
 
-    const [rows] = await pool.query(
-      `SELECT m.id, m.thread_id, m.parent_id, m.sender_id, m.body, m.is_announcement, m.is_deleted,
-              m.deleted_at, m.deleted_by, m.edited_at, m.created_at,
-              u.role as sender_role, u.email as sender_email,
-              up.full_name as sender_name,
-              uv.vote as user_vote,
-              COALESCE(vs.upvotes, 0) as upvotes,
-              COALESCE(vs.downvotes, 0) as downvotes
-       FROM chat_messages m
-       JOIN users u ON u.id = m.sender_id
-       LEFT JOIN user_profiles up ON up.user_id = u.id
-       LEFT JOIN (
-         SELECT message_id,
-           SUM(CASE WHEN vote = 1 THEN 1 ELSE 0 END) as upvotes,
-           SUM(CASE WHEN vote = -1 THEN 1 ELSE 0 END) as downvotes
-         FROM chat_votes
-         GROUP BY message_id
-       ) vs ON vs.message_id = m.id
-       LEFT JOIN chat_votes uv ON uv.message_id = m.id AND uv.user_id = ?
-       WHERE m.thread_id = ?
-       ORDER BY m.created_at ASC`,
-      [userId, threadId]
-    );
+  const activeBan = await getActiveChatBan(userId);
+  const [pinRows] = await pool.query('SELECT message_id FROM chat_pins WHERE thread_id = ?', [threadId]);
+  const pinnedIds = pinRows.map(r => r.message_id);
 
-    const now = Date.now();
-    const isAdmin = role === 'admin';
-    const messages = rows.map(r => {
-      const created = new Date(r.created_at);
-      const minutesAgo = (now - created.getTime()) / 60000;
-      const canEdit = r.sender_id === userId && !r.is_deleted && minutesAgo <= CHAT_EDIT_WINDOW_MIN;
-      const canDelete = isAdmin || access.canModerate || r.sender_id === userId;
-      const name = r.sender_name || (r.sender_email ? r.sender_email.split('@')[0] : 'User');
-      let body = r.body;
-      let displayBody = r.body;
-      if (r.is_deleted && !isAdmin) {
-        body = null;
-        displayBody = 'Message deleted';
-      }
-      return {
-        id: r.id,
-        thread_id: r.thread_id,
-        parent_id: r.parent_id,
-        sender_id: r.sender_id,
-        sender_name: name,
-        sender_role: r.sender_role,
-        body,
-        display_body: displayBody,
-        is_announcement: !!r.is_announcement,
-        is_deleted: !!r.is_deleted,
-        deleted_at: r.deleted_at,
-        deleted_by: r.deleted_by,
-        edited_at: r.edited_at,
-        created_at: r.created_at,
-        upvotes: r.upvotes,
-        downvotes: r.downvotes,
-        user_vote: r.user_vote,
-        can_edit: canEdit,
-        can_delete: canDelete,
-        is_pinned: pinnedIds.includes(r.id)
-      };
-    });
+  const [rows] = await pool.query(
+    `SELECT m.id, m.thread_id, m.parent_id, m.sender_id, m.body, m.is_announcement, m.is_deleted,
+            m.deleted_at, m.deleted_by, m.edited_at, m.created_at,
+            u.role as sender_role, u.email as sender_email,
+            up.full_name as sender_name,
+            uv.vote as user_vote,
+            COALESCE(vs.upvotes, 0) as upvotes,
+            COALESCE(vs.downvotes, 0) as downvotes
+     FROM chat_messages m
+     JOIN users u ON u.id = m.sender_id
+     LEFT JOIN user_profiles up ON up.user_id = u.id
+     LEFT JOIN (
+       SELECT message_id,
+         SUM(CASE WHEN vote = 1 THEN 1 ELSE 0 END) as upvotes,
+         SUM(CASE WHEN vote = -1 THEN 1 ELSE 0 END) as downvotes
+       FROM chat_votes
+       GROUP BY message_id
+     ) vs ON vs.message_id = m.id
+     LEFT JOIN chat_votes uv ON uv.message_id = m.id AND uv.user_id = ?
+     WHERE m.thread_id = ?
+     ORDER BY m.created_at ASC`,
+    [userId, threadId]
+  );
 
-    const pinned = messages.filter(m => pinnedIds.includes(m.id));
+  const now = Date.now();
+  const isAdmin = role === 'admin';
+  const messages = rows.map(r => {
+    const created = new Date(r.created_at);
+    const minutesAgo = (now - created.getTime()) / 60000;
+    const canEdit = r.sender_id === userId && !r.is_deleted && minutesAgo <= CHAT_EDIT_WINDOW_MIN && !activeBan && access.canPost;
+    const canDelete = isAdmin || access.canModerate || r.sender_id === userId;
+    const name = r.sender_name || (r.sender_email ? r.sender_email.split('@')[0] : 'User');
+    let body = r.body;
+    let displayBody = r.body;
+    if (r.is_deleted && !isAdmin) {
+      body = null;
+      displayBody = 'Message deleted';
+    }
+    return {
+      id: r.id,
+      thread_id: r.thread_id,
+      parent_id: r.parent_id,
+      sender_id: r.sender_id,
+      sender_name: name,
+      sender_role: r.sender_role,
+      body,
+      display_body: displayBody,
+      is_announcement: !!r.is_announcement,
+      is_deleted: !!r.is_deleted,
+      deleted_at: r.deleted_at,
+      deleted_by: r.deleted_by,
+      edited_at: r.edited_at,
+      created_at: r.created_at,
+      upvotes: r.upvotes,
+      downvotes: r.downvotes,
+      user_vote: r.user_vote,
+      can_edit: canEdit,
+      can_delete: canDelete,
+      is_pinned: pinnedIds.includes(r.id)
+    };
+  });
 
-    res.json({
+  const pinned = messages.filter(m => pinnedIds.includes(m.id));
+
+  return {
+    ok: true,
+    payload: {
       success: true,
-      thread: { id: access.thread.id, type: access.thread.type, ref_id: access.thread.ref_id, title: access.title },
+      thread: {
+        id: access.thread.id,
+        type: access.thread.type,
+        ref_id: access.thread.ref_id,
+        title: access.title,
+        is_closed: access.isClosed,
+        is_archived: access.isArchived
+      },
       permissions: {
         canRead: access.canRead,
         canPost: access.canPost,
@@ -1649,27 +1755,44 @@ app.get('/api/chat/threads/:threadId', requireAuth, async (req, res) => {
       ban: activeBan,
       pinned,
       messages
-    });
+    }
+  };
+}
+
+async function handleGetChatMessages(req, res) {
+  const userId = getUserId(req);
+  const role = req.session.role;
+  const threadId = parseInt(req.params.threadId, 10);
+  if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
+  if (!threadId) return res.status(400).json({ success: false, message: 'Invalid chat' });
+  try {
+    const result = await buildChatMessagesPayload(threadId, userId, role);
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, message: result.message });
+    }
+    res.json(result.payload);
   } catch (e) {
-    console.error('Error loading chat thread:', e);
+    console.error('Error loading chat messages:', e);
     res.status(500).json({ success: false, message: 'Database error' });
   }
-});
+}
 
-app.post('/api/chat/threads/:threadId/messages', requireAuth, async (req, res) => {
+async function handlePostChatMessage(req, res) {
   const userId = getUserId(req);
   const role = req.session.role;
   const threadId = parseInt(req.params.threadId, 10);
   const { body, parentId, is_announcement } = req.body || {};
   if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
-  if (!threadId) return res.status(400).json({ success: false, message: 'Invalid thread' });
+  if (!threadId) return res.status(400).json({ success: false, message: 'Invalid chat' });
   const trimmed = String(body || '').trim();
   if (!trimmed) return res.status(400).json({ success: false, message: 'Message cannot be empty' });
 
   try {
     const access = await getChatThreadAccess(threadId, userId, role);
     if (!access.ok) return res.status(403).json({ success: false, message: access.error });
-    if (!access.canPost) return res.status(403).json({ success: false, message: 'Posting not allowed' });
+    if (!access.canPost) {
+      return res.status(403).json({ success: false, message: access.isClosed ? 'Chat is closed' : 'Posting not allowed' });
+    }
 
     if (parentId) {
       const [parent] = await pool.query(
@@ -1699,7 +1822,16 @@ app.post('/api/chat/threads/:threadId/messages', requireAuth, async (req, res) =
     console.error('Error posting chat message:', e);
     res.status(500).json({ success: false, message: 'Database error' });
   }
-});
+}
+
+app.get('/api/chat/threads', requireAuth, (req, res) => handleListChats(req, res, 'threads'));
+app.get('/api/chats', requireAuth, (req, res) => handleListChats(req, res, 'chats'));
+
+app.get('/api/chat/threads/:threadId', requireAuth, handleGetChatMessages);
+app.get('/api/chats/:threadId/messages', requireAuth, handleGetChatMessages);
+
+app.post('/api/chat/threads/:threadId/messages', requireAuth, handlePostChatMessage);
+app.post('/api/chats/:threadId/messages', requireAuth, handlePostChatMessage);
 
 app.put('/api/chat/messages/:id', requireAuth, async (req, res) => {
   const userId = getUserId(req);
@@ -1721,6 +1853,13 @@ app.put('/api/chat/messages/:id', requireAuth, async (req, res) => {
     const msg = rows[0];
     const access = await getChatThreadAccess(msg.thread_id, userId, role);
     if (!access.ok) return res.status(403).json({ success: false, message: access.error });
+    if (!access.canPost) {
+      return res.status(403).json({ success: false, message: access.isClosed ? 'Chat is closed' : 'Editing not allowed' });
+    }
+    const activeBan = await getActiveChatBan(userId);
+    if (activeBan) {
+      return res.status(403).json({ success: false, message: 'You are currently banned from chat.' });
+    }
     if (msg.sender_id !== userId) {
       return res.status(403).json({ success: false, message: 'Only the author can edit this message' });
     }
@@ -1863,13 +2002,13 @@ app.delete('/api/chat/threads/:threadId/pins/:messageId', requireAuth, async (re
   }
 });
 
-app.get('/api/chat/threads/:threadId/search', requireAuth, async (req, res) => {
+async function handleChatSearch(req, res) {
   const userId = getUserId(req);
   const role = req.session.role;
   const threadId = parseInt(req.params.threadId, 10);
   const q = String(req.query.q || '').trim();
   if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
-  if (!threadId) return res.status(400).json({ success: false, message: 'Invalid thread' });
+  if (!threadId) return res.status(400).json({ success: false, message: 'Invalid chat' });
   if (!q) return res.status(400).json({ success: false, message: 'Search query required' });
   try {
     const access = await getChatThreadAccess(threadId, userId, role);
@@ -1912,23 +2051,29 @@ app.get('/api/chat/threads/:threadId/search', requireAuth, async (req, res) => {
     console.error('Error searching chat messages:', e);
     res.status(500).json({ success: false, message: 'Database error' });
   }
-});
+}
 
-app.delete('/api/chat/threads/:threadId', requireAuth, async (req, res) => {
+async function handleDeleteChatThread(req, res) {
   const userId = getUserId(req);
   const role = req.session.role;
   const threadId = parseInt(req.params.threadId, 10);
   if (!userId) return res.status(401).json({ success: false, message: 'User ID required' });
-  if (!threadId) return res.status(400).json({ success: false, message: 'Invalid thread' });
+  if (!threadId) return res.status(400).json({ success: false, message: 'Invalid chat' });
   if (role !== 'admin') return res.status(403).json({ success: false, message: 'Admin access required' });
   try {
     await pool.query('UPDATE chat_threads SET deleted_at = NOW() WHERE id = ?', [threadId]);
-    res.json({ success: true, message: 'Thread deleted' });
+    res.json({ success: true, message: 'Chat archived' });
   } catch (e) {
-    console.error('Error deleting thread:', e);
+    console.error('Error deleting chat:', e);
     res.status(500).json({ success: false, message: 'Database error' });
   }
-});
+}
+
+app.get('/api/chat/threads/:threadId/search', requireAuth, handleChatSearch);
+app.get('/api/chats/:threadId/search', requireAuth, handleChatSearch);
+
+app.delete('/api/chat/threads/:threadId', requireAuth, handleDeleteChatThread);
+app.delete('/api/chats/:threadId', requireAuth, handleDeleteChatThread);
 
 // ==================== ADMIN: USER MANAGEMENT ====================
 
@@ -2125,6 +2270,46 @@ app.post('/api/admin/chat/unban', requireAdmin, async (req, res) => {
   }
 });
 
+app.get('/api/admin/chat/banned-words', requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT id, word, created_at FROM chat_banned_words ORDER BY word');
+    res.json({ success: true, words: rows });
+  } catch (e) {
+    console.error('Error loading banned words:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.post('/api/admin/chat/banned-words', requireAdmin, async (req, res) => {
+  const wordRaw = String(req.body?.word || '').trim();
+  if (!wordRaw) return res.status(400).json({ success: false, message: 'Word required' });
+  const word = wordRaw.toLowerCase();
+  try {
+    await pool.query('INSERT INTO chat_banned_words (word, created_by) VALUES (?, ?)', [word, req.session.userId]);
+    bannedWordsCache.words = null;
+    res.json({ success: true, message: 'Word added' });
+  } catch (e) {
+    if (e?.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ success: false, message: 'Word already exists' });
+    }
+    console.error('Error adding banned word:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+app.delete('/api/admin/chat/banned-words/:id', requireAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ success: false, message: 'Invalid word id' });
+  try {
+    await pool.query('DELETE FROM chat_banned_words WHERE id = ?', [id]);
+    bannedWordsCache.words = null;
+    res.json({ success: true, message: 'Word removed' });
+  } catch (e) {
+    console.error('Error removing banned word:', e);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
 // ==================== ADMIN: EVENT OVERSIGHT ====================
 
 app.get('/api/admin/events', requireAdmin, async (req, res) => {
@@ -2235,6 +2420,7 @@ app.delete('/api/admin/events/:id', requireAdmin, async (req, res) => {
   try {
     const [event] = await pool.query('SELECT title FROM events WHERE id = ?', [eventId]);
     if (!event.length) return res.status(404).json({ success: false, message: 'Event not found' });
+    await pool.query('UPDATE chat_threads SET deleted_at = NOW() WHERE type = ? AND ref_id = ?', ['event', eventId]);
     await pool.query('DELETE FROM events WHERE id = ?', [eventId]);
     await logAdminAction(req.session.userId, req.session.email, 'delete_event', 'event', eventId, 
       { event_title: event[0].title }, getClientIp(req));

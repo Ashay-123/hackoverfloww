@@ -222,7 +222,7 @@
         <h1 class="section-title">Chat Moderation</h1>
         <p class="section-desc">Monitor event and club chats, manage bans</p>
 
-        <div class="chat-layout">
+        <div class="chat-layout chat-layout-admin">
           <aside class="chat-sidebar">
             <div class="chat-sidebar-header">
               <input type="text" id="chatThreadSearch" class="chat-search" placeholder="Search chats">
@@ -253,7 +253,7 @@
             <div id="chatMessages" class="chat-messages">
               <p class="muted">No chat selected.</p>
             </div>
-            <form id="chatForm" class="chat-composer">
+            <form id="chatForm" class="chat-composer" style="display:none">
               <div id="chatReplyBanner" class="chat-reply-banner" style="display:none"></div>
               <textarea id="chatInput" rows="3" placeholder="Write a message…"></textarea>
               <div class="chat-compose-actions">
@@ -265,11 +265,34 @@
               </div>
             </form>
           </div>
-        </div>
 
-        <div class="card">
-          <h3>Active Chat Bans</h3>
-          <div id="chatBansList" class="list-compact">Loading…</div>
+          <aside class="chat-moderation">
+            <div class="chat-mod-card">
+              <h4>Chat details</h4>
+              <div id="chatThreadDetails" class="muted">Select a chat to view details.</div>
+            </div>
+            <div class="chat-mod-card">
+              <h4>Selected message</h4>
+              <div id="chatSelectedMessage" class="muted">Select a message to moderate.</div>
+              <div class="chat-mod-actions">
+                <button type="button" class="btn btn-ghost btn-sm" id="chatDeleteMessage" disabled>Delete message</button>
+                <button type="button" class="btn btn-danger btn-sm" id="chatBanUser" disabled>Ban user</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="chatUnbanUser" disabled>Unban user</button>
+              </div>
+            </div>
+            <div class="chat-mod-card">
+              <h4>Banned words</h4>
+              <form id="chatBannedWordForm" class="chat-mod-form">
+                <input type="text" id="chatBannedWordInput" class="chat-search" placeholder="Add a word">
+                <button type="submit" class="btn btn-ghost btn-sm">Add</button>
+              </form>
+              <div id="chatBannedWordsList" class="list-compact">Loading…</div>
+            </div>
+            <div class="chat-mod-card">
+              <h4>Active chat bans</h4>
+              <div id="chatBansList" class="list-compact">Loading…</div>
+            </div>
+          </aside>
         </div>
       </section>
 
