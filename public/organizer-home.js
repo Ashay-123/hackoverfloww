@@ -126,6 +126,12 @@
     const nav = document.querySelector('.nav-item[href="#' + id + '"]');
     if (sec) sec.classList.add('active');
     if (nav) nav.classList.add('active');
+    if (id === 'events' && sec) {
+      const activeTab = sec.querySelector('.tab.active');
+      const key = activeTab?.dataset?.tab || 'myevents';
+      if (key === 'myevents') loadMyEvents();
+      if (key === 'create') resetEventForm();
+    }
   }
 
   function onHash() {
@@ -200,8 +206,6 @@
     $('pDepartment').value = p?.department || '';
     $('pPhone').value = p?.phone || '';
     $('pBio').value = p?.bio || '';
-    $('pVisibility').value = p?.profile_visibility || 'internal';
-    $('settingsVisibility').value = p?.profile_visibility || 'internal';
     $('settingsEmail').textContent = u?.email || '—';
   }
 
@@ -212,25 +216,18 @@
     }).catch(() => {});
   }
 
-  $('profileForm')?.addEventListener('submit', function (e) {
-    e.preventDefault();
-    put('/api/profile', {
-      full_name: $('pFullName').value.trim() || null,
-      department: $('pDepartment').value.trim() || null,
-      phone: $('pPhone').value.trim() || null,
-      bio: $('pBio').value.trim() || null,
-      profile_visibility: $('pVisibility').value
-    }).then(r => {
-      if (r.success) { loadProfile(); loadProfileClubs(); alert('Profile saved.'); }
-      else alert(r.message || 'Failed to save.');
-    }).catch(() => alert('Request failed.'));
-  });
-
-  $('settingsVisibility')?.addEventListener('change', function () {
-    put('/api/profile', { profile_visibility: this.value }).then(r => {
-      if (r.success) { loadProfile(); $('pVisibility').value = this.value; }
+    $('profileForm')?.addEventListener('submit', function (e) {
+      e.preventDefault();
+      put('/api/profile', {
+        full_name: $('pFullName').value.trim() || null,
+        department: $('pDepartment').value.trim() || null,
+        phone: $('pPhone').value.trim() || null,
+        bio: $('pBio').value.trim() || null
+      }).then(r => {
+        if (r.success) { loadProfile(); loadProfileClubs(); alert('Profile saved.'); }
+        else alert(r.message || 'Failed to save.');
+      }).catch(() => alert('Request failed.'));
     });
-  });
 
   // ---------- Clubs (profile section) ----------
   function loadProfileClubs() {
@@ -1728,18 +1725,36 @@
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
+  function parseDateValue(s, opts = {}) {
+    if (!s) return null;
+    if (s instanceof Date) return isNaN(s.getTime()) ? null : s;
+    if (typeof s === 'string') {
+      const trimmed = s.trim();
+      if (!trimmed) return null;
+      if (trimmed.includes('T') || trimmed.includes(' ')) {
+        const normalized = trimmed.includes(' ') && !trimmed.includes('T')
+          ? trimmed.replace(' ', 'T')
+          : trimmed;
+        const d = new Date(normalized);
+        return isNaN(d.getTime()) ? null : d;
+      }
+      const d = new Date(trimmed + 'T00:00:00');
+      return isNaN(d.getTime()) ? null : d;
+    }
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
   function formatDate(s) {
-    if (!s) return '—';
-    try { return new Date(s + 'T00:00:00').toLocaleDateString(undefined, { dateStyle: 'medium' }); } catch (_) { return s; }
+    const d = parseDateValue(s);
+    if (!d) return s || '—';
+    return d.toLocaleDateString(undefined, { dateStyle: 'medium' });
   }
 
   function formatDateTime(s) {
-    if (!s) return '—';
-    try {
-      const d = new Date(s);
-      if (isNaN(d.getTime())) return s;
-      return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
-    } catch (_) { return s; }
+    const d = parseDateValue(s);
+    if (!d) return s || '—';
+    return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
   }
 
   // ---------- Init ----------

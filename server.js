@@ -2161,15 +2161,28 @@ app.post('/api/chat/messages/:id/vote', requireAuth, async (req, res) => {
     const access = await getChatThreadAccess(rows[0].thread_id, userId, role);
     if (!access.ok) return res.status(403).json({ success: false, message: access.error });
 
+    const [existing] = await pool.query(
+      'SELECT vote FROM chat_votes WHERE message_id = ? AND user_id = ?',
+      [messageId, userId]
+    );
+    if (existing.length) {
+      if (existing[0].vote === voteVal) {
+        await pool.query('DELETE FROM chat_votes WHERE message_id = ? AND user_id = ?', [messageId, userId]);
+        return res.json({ success: true, message: 'Vote removed', vote: 0 });
+      }
+      await pool.query(
+        'UPDATE chat_votes SET vote = ? WHERE message_id = ? AND user_id = ?',
+        [voteVal, messageId, userId]
+      );
+      return res.json({ success: true, message: 'Vote updated', vote: voteVal });
+    }
+
     await pool.query(
       'INSERT INTO chat_votes (message_id, user_id, vote) VALUES (?, ?, ?)',
       [messageId, userId, voteVal]
     );
-    res.json({ success: true, message: 'Vote recorded' });
+    res.json({ success: true, message: 'Vote recorded', vote: voteVal });
   } catch (e) {
-    if (e?.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ success: false, message: 'You already voted on this message' });
-    }
     console.error('Error voting on chat message:', e);
     res.status(500).json({ success: false, message: 'Database error' });
   }

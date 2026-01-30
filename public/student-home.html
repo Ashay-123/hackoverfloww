@@ -32,7 +32,7 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
           <div class="user-dropdown" id="userDropdown">
-            <a href="#profile">Profile &amp; visibility</a>
+            <a href="#profile">Profile</a>
             <a href="#settings">Settings</a>
             <hr>
             <button type="button" id="logoutBtn">Log out</button>
@@ -133,7 +133,7 @@
       <!-- Profile -->
       <section id="profile" class="section">
         <h1 class="section-title">My profile</h1>
-        <p class="section-desc">Basic details and visibility</p>
+        <p class="section-desc">Basic details</p>
 
         <div class="card">
           <h3>Basic details</h3>
@@ -161,14 +161,6 @@
             <div class="field">
               <label>Bio</label>
               <textarea id="pBio" rows="3" placeholder="A short bio (optional)"></textarea>
-            </div>
-            <div class="field">
-              <label>Profile visibility</label>
-              <select id="pVisibility">
-                <option value="public">Public — anyone can see</option>
-                <option value="internal">Internal — only logged-in users</option>
-                <option value="private">Private — only you</option>
-              </select>
             </div>
             <button type="submit" class="btn btn-primary">Save profile</button>
           </form>
@@ -332,15 +324,6 @@
       <section id="settings" class="section">
         <h1 class="section-title">Settings</h1>
         <p class="section-desc">Preferences and account</p>
-        <div class="card">
-          <h3>Profile visibility</h3>
-          <p class="muted">Control who can see your profile details. You can also set this in <a href="#profile">My profile</a>.</p>
-          <select id="settingsVisibility">
-            <option value="public">Public</option>
-            <option value="internal">Internal</option>
-            <option value="private">Private</option>
-          </select>
-        </div>
         <div class="card">
           <h3>Notifications</h3>
           <p class="muted">You will receive: event approvals/rejections, upcoming event reminders, and resource booking status updates.</p>

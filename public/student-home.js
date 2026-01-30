@@ -187,8 +187,6 @@
     $('pYear').value = p?.academic_year || '';
     $('pPhone').value = p?.phone || '';
     $('pBio').value = p?.bio || '';
-    $('pVisibility').value = p?.profile_visibility || 'internal';
-    $('settingsVisibility').value = p?.profile_visibility || 'internal';
     $('settingsEmail').textContent = u?.email || '—';
   }
 
@@ -199,26 +197,19 @@
     }).catch(() => {});
   }
 
-  $('profileForm')?.addEventListener('submit', function (e) {
-    e.preventDefault();
-    put('/api/profile', {
-      full_name: $('pFullName').value.trim() || null,
-      department: $('pDepartment').value.trim() || null,
-      academic_year: $('pYear').value.trim() || null,
-      phone: $('pPhone').value.trim() || null,
-      bio: $('pBio').value.trim() || null,
-      profile_visibility: $('pVisibility').value
-    }).then(r => {
-      if (r.success) { loadProfile(); loadProfileClubs(); alert('Profile saved.'); }
-      else alert(r.message || 'Failed to save.');
-    }).catch(() => alert('Request failed.'));
-  });
-
-  $('settingsVisibility')?.addEventListener('change', function () {
-    put('/api/profile', { profile_visibility: this.value }).then(r => {
-      if (r.success) { loadProfile(); $('pVisibility').value = this.value; }
+    $('profileForm')?.addEventListener('submit', function (e) {
+      e.preventDefault();
+      put('/api/profile', {
+        full_name: $('pFullName').value.trim() || null,
+        department: $('pDepartment').value.trim() || null,
+        academic_year: $('pYear').value.trim() || null,
+        phone: $('pPhone').value.trim() || null,
+        bio: $('pBio').value.trim() || null
+      }).then(r => {
+        if (r.success) { loadProfile(); loadProfileClubs(); alert('Profile saved.'); }
+        else alert(r.message || 'Failed to save.');
+      }).catch(() => alert('Request failed.'));
     });
-  });
 
   // ---------- Clubs (profile section) ----------
   function loadProfileClubs() {
