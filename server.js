@@ -88,6 +88,7 @@ async function initDb() {
     pool = mysql.createPool(dbConfig);
     await pool.query('SELECT 1');
     console.log('Connected to MySQL database');
+    await ensureChatSchema();
     await seedIfEmpty();
     await backfillChatThreads();
   } catch (err) {
@@ -334,6 +335,124 @@ async function ensureChatThreads(type, ids) {
     params.push(type, id);
   });
   await pool.query(`INSERT IGNORE INTO chat_threads (type, ref_id) VALUES ${values}`, params);
+}
+
+async function ensureChatSchema() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_threads (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        type ENUM('club', 'event') NOT NULL,
+        ref_id INT NOT NULL,
+        last_message_at TIMESTAMP NULL DEFAULT NULL,
+        deleted_at TIMESTAMP NULL DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_chat_thread (type, ref_id),
+        INDEX idx_chat_threads_last_message (last_message_at)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        thread_id INT NOT NULL,
+        parent_id INT NULL,
+        sender_id INT NOT NULL,
+        body TEXT NOT NULL,
+        is_announcement TINYINT(1) DEFAULT 0,
+        is_deleted TINYINT(1) DEFAULT 0,
+        deleted_at TIMESTAMP NULL DEFAULT NULL,
+        deleted_by INT NULL,
+        edited_at TIMESTAMP NULL DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_id) REFERENCES chat_messages(id) ON DELETE SET NULL,
+        FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (deleted_by) REFERENCES users(id) ON DELETE SET NULL,
+        INDEX idx_chat_messages_thread (thread_id),
+        INDEX idx_chat_messages_parent (parent_id),
+        INDEX idx_chat_messages_sender (sender_id),
+        INDEX idx_chat_messages_created (created_at)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_votes (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        message_id INT NOT NULL,
+        user_id INT NOT NULL,
+        vote TINYINT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_chat_vote (message_id, user_id),
+        FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        INDEX idx_chat_votes_message (message_id),
+        INDEX idx_chat_votes_user (user_id)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_pins (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        thread_id INT NOT NULL,
+        message_id INT NOT NULL,
+        pinned_by INT NULL,
+        pinned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_chat_pin (thread_id, message_id),
+        FOREIGN KEY (thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE,
+        FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
+        FOREIGN KEY (pinned_by) REFERENCES users(id) ON DELETE SET NULL,
+        INDEX idx_chat_pins_thread (thread_id)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_banned_words (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        word VARCHAR(100) UNIQUE NOT NULL,
+        created_by INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_user_offenses (
+        user_id INT PRIMARY KEY,
+        offense_count INT DEFAULT 0,
+        last_offense_at TIMESTAMP NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_bans (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        user_id INT NOT NULL,
+        scope ENUM('chat', 'system') DEFAULT 'chat',
+        reason VARCHAR(255) NOT NULL,
+        offense_count INT DEFAULT 0,
+        banned_by INT NULL,
+        start_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        end_at TIMESTAMP NULL,
+        manual_unban_required TINYINT(1) DEFAULT 0,
+        revoked_at TIMESTAMP NULL,
+        revoked_by INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (banned_by) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY (revoked_by) REFERENCES users(id) ON DELETE SET NULL,
+        INDEX idx_user_bans_user (user_id, scope),
+        INDEX idx_user_bans_active (scope, revoked_at, end_at)
+      )
+    `);
+  } catch (e) {
+    console.error('Failed to ensure chat schema:', e.message);
+    throw e;
+  }
 }
 
 async function backfillChatThreads() {
