@@ -312,7 +312,6 @@
       if (status === 'published') {
         actions.push(`<button type="button" class="btn btn-sm btn-secondary" data-close="${e.id}">Close</button>`);
         actions.push(`<button type="button" class="btn btn-sm btn-primary" data-notify="${e.id}">Notify Participants</button>`);
-        actions.push(`<button type="button" class="btn btn-sm btn-ghost" data-registrations="${e.id}">View Registrations</button>`);
       }
       if (status === 'pending_approval' || status === 'published' || status === 'closed') {
         actions.push(`<button type="button" class="btn btn-sm btn-ghost" data-registrations="${e.id}">View Registrations</button>`);
