@@ -8,6 +8,10 @@ Role-based campus platform for events, resources, clubs, and messaging with dedi
 
 http://hackoverflow.duckdns.org:3001/
 
+or 
+
+16.16.24.193:3001 (convient for mobile)
+
 ## Demo accounts
 
 - Admin: admin@example.com / password123
