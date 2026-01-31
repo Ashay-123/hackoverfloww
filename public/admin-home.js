@@ -3,6 +3,7 @@
 
   const API = '';
   let currentUserId = null;
+  let sessionUserId = null;
   let currentEventId = null;
   let currentPage = 1;
   let frozenRegistrations = false;
@@ -845,8 +846,9 @@
       <div class="chat-selected-meta">${formatDateTime(msg.created_at)}</div>
       <div class="chat-selected-meta">${escapeHtml(msg.display_body || '')}</div>
     `;
+    const isSelf = sessionUserId && msg.sender_id === sessionUserId;
     if (delBtn) delBtn.disabled = !msg.can_delete;
-    if (banBtn) banBtn.disabled = !msg.sender_id;
+    if (banBtn) banBtn.disabled = !msg.sender_id || isSelf;
     if (unbanBtn) unbanBtn.disabled = !msg.sender_id;
   }
 
@@ -899,7 +901,7 @@
         ? `<button type="button" class="btn btn-ghost btn-sm" data-unpin="${msg.id}">Unpin</button>`
         : `<button type="button" class="btn btn-ghost btn-sm" data-pin="${msg.id}">Pin</button>`);
     }
-    if (!msg.is_deleted) {
+    if (!msg.is_deleted && (!sessionUserId || msg.sender_id !== sessionUserId)) {
       actions.push(`<button type="button" class="btn btn-danger btn-sm" data-ban="${msg.sender_id}">Ban user</button>`);
     }
 
@@ -992,7 +994,7 @@
         ? `<button type="button" class="btn btn-ghost btn-sm" data-unpin="${msg.id}">Unpin</button>`
         : `<button type="button" class="btn btn-ghost btn-sm" data-pin="${msg.id}">Pin</button>`);
     }
-    if (!msg.is_deleted) {
+    if (!msg.is_deleted && (!sessionUserId || msg.sender_id !== sessionUserId)) {
       actions.push(`<button type="button" class="btn btn-danger btn-sm" data-ban="${msg.sender_id}">Ban user</button>`);
     }
     return actions.join('');
@@ -1412,6 +1414,10 @@
 
   async function banUser(userId) {
     if (!userId) return;
+    if (sessionUserId && userId === sessionUserId) {
+      alert('You cannot ban yourself.');
+      return;
+    }
     if (!confirm('Ban this user from chat?')) return;
     const duration = prompt('Ban duration in hours (leave blank for permanent):');
     let payload = { userId };
@@ -1787,6 +1793,7 @@
       redirectLogin();
       return;
     }
+    sessionUserId = u.id;
     $('userName').textContent = u.email.split('@')[0];
     $('userAvatar').textContent = u.email[0].toUpperCase();
 

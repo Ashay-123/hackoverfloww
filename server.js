@@ -2459,6 +2459,9 @@ app.post('/api/admin/chat/ban', requireAdmin, async (req, res) => {
   const { userId, durationHours, reason, permanent } = req.body || {};
   const targetId = parseInt(userId, 10);
   if (!targetId) return res.status(400).json({ success: false, message: 'userId required' });
+  if (targetId === req.session.userId) {
+    return res.status(403).json({ success: false, message: 'Cannot ban yourself' });
+  }
   const hours = durationHours ? parseInt(durationHours, 10) : null;
   if (hours !== null && (isNaN(hours) || hours <= 0)) {
     return res.status(400).json({ success: false, message: 'durationHours must be a positive number' });
