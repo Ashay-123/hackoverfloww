@@ -1,3 +1,5 @@
+#Video Presentation Link: https://drive.google.com/drive/u/1/folders/1XLrBfuy8BvSqFvwOjX_R1GQlSM9_abWW
+
 # Campus Resource and Event Management
 
 Role-based campus platform for events, resources, clubs, and messaging with dedicated admin, organizer, and participant experiences.
