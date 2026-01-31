@@ -847,8 +847,9 @@
       <div class="chat-selected-meta">${escapeHtml(msg.display_body || '')}</div>
     `;
     const isSelf = sessionUserId && msg.sender_id === sessionUserId;
+    const isAdmin = msg.sender_role === 'admin';
     if (delBtn) delBtn.disabled = !msg.can_delete;
-    if (banBtn) banBtn.disabled = !msg.sender_id || isSelf;
+    if (banBtn) banBtn.disabled = !msg.sender_id || isSelf || isAdmin;
     if (unbanBtn) unbanBtn.disabled = !msg.sender_id;
   }
 
@@ -901,8 +902,8 @@
         ? `<button type="button" class="btn btn-ghost btn-sm" data-unpin="${msg.id}">Unpin</button>`
         : `<button type="button" class="btn btn-ghost btn-sm" data-pin="${msg.id}">Pin</button>`);
     }
-    if (!msg.is_deleted && (!sessionUserId || msg.sender_id !== sessionUserId)) {
-      actions.push(`<button type="button" class="btn btn-danger btn-sm" data-ban="${msg.sender_id}">Ban user</button>`);
+    if (!msg.is_deleted && msg.sender_role !== 'admin' && (!sessionUserId || msg.sender_id !== sessionUserId)) {
+      actions.push(`<button type="button" class="btn btn-danger btn-sm" data-ban="${msg.sender_id}" data-ban-role="${msg.sender_role || ''}">Ban user</button>`);
     }
 
     const replies = msg.replies || [];
@@ -994,8 +995,8 @@
         ? `<button type="button" class="btn btn-ghost btn-sm" data-unpin="${msg.id}">Unpin</button>`
         : `<button type="button" class="btn btn-ghost btn-sm" data-pin="${msg.id}">Pin</button>`);
     }
-    if (!msg.is_deleted && (!sessionUserId || msg.sender_id !== sessionUserId)) {
-      actions.push(`<button type="button" class="btn btn-danger btn-sm" data-ban="${msg.sender_id}">Ban user</button>`);
+    if (!msg.is_deleted && msg.sender_role !== 'admin' && (!sessionUserId || msg.sender_id !== sessionUserId)) {
+      actions.push(`<button type="button" class="btn btn-danger btn-sm" data-ban="${msg.sender_id}" data-ban-role="${msg.sender_role || ''}">Ban user</button>`);
     }
     return actions.join('');
   }
@@ -1412,10 +1413,14 @@
     }
   }
 
-  async function banUser(userId) {
+  async function banUser(userId, userRole) {
     if (!userId) return;
     if (sessionUserId && userId === sessionUserId) {
       alert('You cannot ban yourself.');
+      return;
+    }
+    if (userRole === 'admin') {
+      alert('You cannot ban another admin.');
       return;
     }
     if (!confirm('Ban this user from chat?')) return;
@@ -1533,7 +1538,8 @@
       btn.dataset.wired = '1';
       btn.addEventListener('click', async () => {
         const userId = parseInt(btn.dataset.ban, 10);
-        await banUser(userId);
+        const userRole = btn.dataset.banRole || '';
+        await banUser(userId, userRole);
       });
     });
 
@@ -1738,7 +1744,7 @@
     $('chatBanUser')?.addEventListener('click', async () => {
       const msg = chatState.selectedMessage;
       if (!msg) return;
-      await banUser(msg.sender_id);
+      await banUser(msg.sender_id, msg.sender_role);
     });
 
     $('chatUnbanUser')?.addEventListener('click', async () => {

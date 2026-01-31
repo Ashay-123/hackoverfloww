@@ -2467,8 +2467,11 @@ app.post('/api/admin/chat/ban', requireAdmin, async (req, res) => {
     return res.status(400).json({ success: false, message: 'durationHours must be a positive number' });
   }
   try {
-    const [user] = await pool.query('SELECT email FROM users WHERE id = ?', [targetId]);
+    const [user] = await pool.query('SELECT email, role FROM users WHERE id = ?', [targetId]);
     if (!user.length) return res.status(404).json({ success: false, message: 'User not found' });
+    if (user[0].role === 'admin') {
+      return res.status(403).json({ success: false, message: 'Cannot ban another admin' });
+    }
 
     let endAt = null;
     let manualUnban = 0;
