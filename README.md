@@ -1,4 +1,4 @@
-**Video Presentation Link: https://drive.google.com/drive/u/1/folders/1XLrBfuy8BvSqFvwOjX_R1GQlSM9_abWW**
+## (site is currently down contact admin for quries.)
 
 # Campus Resource and Event Management
 
